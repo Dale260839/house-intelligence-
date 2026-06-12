@@ -1,0 +1,251 @@
+{
+  "_meta": {
+    "name": "House Intelligence — Construction Era Knowledge Base",
+    "version": "1.0",
+    "scope": "national_us",
+    "description": "Maps a home's build year (and optional region) to the building systems and hazards likely present, plus the inspection items a contractor should include in a scope of work. Era boundaries are national norms; actual homes vary because of remodels, regional practice, and slow code adoption. Always treated as 'likely / inspect for', never 'guaranteed present'.",
+    "disclaimer": "These are probabilistic era patterns for scoping inspections, NOT a guarantee of what is in any specific house. A home may have been re-piped, re-wired, or renovated. Use to PROMPT inspection, not to assert condition.",
+    "systems_covered": ["electrical", "plumbing_supply", "plumbing_waste", "panel", "hazards", "foundation", "heating", "insulation", "roofing", "windows"],
+    "categories": ["Electrical", "Plumbing", "Structural", "HVAC", "Hazards", "Envelope"],
+    "category_map": {
+      "electrical": "Electrical", "panel": "Electrical",
+      "plumbing_supply": "Plumbing", "plumbing_waste": "Plumbing",
+      "foundation": "Structural",
+      "heating": "HVAC",
+      "hazards": "Hazards",
+      "insulation": "Envelope", "windows": "Envelope", "roofing": "Envelope"
+    },
+    "severity_levels": ["High", "Medium", "Low"],
+    "severity_note": "Per the Dataset Blueprint (Layer 2), every inspection item carries a High/Medium/Low flag and each region+era row rolls up to its highest item severity. Severity is assigned by the engine's classifier (lookup_engine.js: classifySeverity) so it stays consistent across all eras without per-row hand-tagging.",
+    "sources": [
+      "InspectAPedia (Old Electrical Wiring history)",
+      "ASHI - A Brief History of Pipes",
+      "UL / David Dini wiring history",
+      "EPA Lead and Copper Rule; Safe Drinking Water Act 1986",
+      "CPSC lead paint ban 1978",
+      "Field-practice timelines (Mike Holt / IAEI forums) for transition years"
+    ],
+    "last_reviewed": "2026-06-12"
+  },
+
+  "era_bands": [
+    {
+      "id": "pre_1900",
+      "label": "Pre-1900",
+      "year_min": 0,
+      "year_max": 1899,
+      "electrical": {
+        "likely": ["No original electrical (gas/oil lighting) or earliest knob-and-tube retrofits", "Open wiring on insulators where electrified"],
+        "inspect_for": ["Any active knob-and-tube", "Ungrounded circuits", "Undersized service (often <60A)", "Cloth/rubber insulation breakdown"]
+      },
+      "plumbing_supply": {
+        "likely": ["Lead service line", "Early cast iron mains", "Possible wood/lead interior pipe"],
+        "inspect_for": ["Lead service line (high priority)", "Lead pipe in home", "Galvanized retrofit", "Low pressure from corrosion"]
+      },
+      "plumbing_waste": { "likely": ["Cast iron drain/waste", "Possible Orangeburg later added"], "inspect_for": ["Cast iron corrosion/scaling", "Bellied or cracked drains"] },
+      "panel": { "likely": ["Fuse box (very low amperage) or none"], "inspect_for": ["Knob-and-tube fuse panels", "Service upgrade needed for modern loads"] },
+      "hazards": { "likely": ["Lead paint", "Lead pipe", "Possible asbestos in later retrofits"], "inspect_for": ["Lead-based paint (assume present)", "Lead service line", "Asbestos in any added insulation/ducting"] },
+      "foundation": { "likely": ["Stone/rubble or brick foundation", "Post-and-pier", "Dirt or shallow cellar"], "inspect_for": ["Mortar deterioration", "Settlement/cracking", "Moisture intrusion", "Inadequate footings"] },
+      "heating": { "likely": ["Coal/wood originally; gravity furnace retrofits"], "inspect_for": ["Asbestos on old ductwork/pipe insulation", "Abandoned coal systems"] },
+      "insulation": { "likely": ["None original"], "inspect_for": ["No wall insulation", "Asbestos if later added", "Knob-and-tube buried in added insulation (fire risk)"] },
+      "roofing": { "likely": ["Wood shingle originally; many re-roofs since"], "inspect_for": ["Multiple roof layers", "Undersized framing for modern loads"] },
+      "windows": { "likely": ["Single-pane wood, original or replaced"], "inspect_for": ["Single-pane windows (energy loss / replacement candidate)", "Lead paint on sashes", "Rot", "Counterweight pockets (air leakage)"] }
+    },
+
+    {
+      "id": "1900_1929",
+      "label": "1900–1929",
+      "year_min": 1900,
+      "year_max": 1929,
+      "electrical": {
+        "likely": ["Knob-and-tube wiring (dominant)", "Ungrounded", "6–30A service common", "Early BX/armored cable in some regions late in era"],
+        "inspect_for": ["Active knob-and-tube", "Ungrounded outlets", "Overfusing", "Brittle insulation", "Undersized service"]
+      },
+      "plumbing_supply": {
+        "likely": ["Galvanized steel becoming common", "Lead service line still likely", "Lead solder"],
+        "inspect_for": ["Lead service line", "Galvanized corrosion/flow restriction", "Lead pipe sections", "Mixed-metal corrosion"]
+      },
+      "plumbing_waste": { "likely": ["Cast iron drain/waste/vent"], "inspect_for": ["Cast iron scaling/cracking", "Old vent configurations not to code"] },
+      "panel": { "likely": ["Fuse panel (often 30–60A)"], "inspect_for": ["Fuse panel", "Service upgrade for modern load", "Knob-and-tube tie-ins"] },
+      "hazards": { "likely": ["Lead paint", "Lead pipe/solder", "Asbestos appearing in insulation"], "inspect_for": ["Lead-based paint (assume present)", "Lead service line", "Asbestos pipe/duct insulation"] },
+      "foundation": { "likely": ["Brick, stone, or early poured concrete", "Unreinforced masonry"], "inspect_for": ["Unreinforced masonry (seismic regions)", "Cracking/settlement", "Crawlspace moisture"] },
+      "heating": { "likely": ["Gravity (octopus) furnace; coal converted to oil/gas"], "inspect_for": ["Asbestos duct/pipe insulation (very likely)", "Cracked heat exchanger on old units"] },
+      "insulation": { "likely": ["Little to none; balloon framing"], "inspect_for": ["Empty wall cavities", "Balloon-frame fire-blocking absent", "Asbestos if retrofit"] },
+      "roofing": { "likely": ["Wood shingle / early asphalt"], "inspect_for": ["Multiple layers", "Sheathing condition"] },
+      "windows": { "likely": ["Single-pane wood, weight-and-pulley"], "inspect_for": ["Single-pane windows (energy loss / replacement candidate)", "Lead paint", "Air leakage", "Rot/glazing failure"] }
+    },
+
+    {
+      "id": "1930_1949",
+      "label": "1930–1949",
+      "year_min": 1930,
+      "year_max": 1949,
+      "electrical": {
+        "likely": ["Transition era: late knob-and-tube + BX/armored + early cloth NM (Romex)", "Mostly ungrounded", "60A service common"],
+        "inspect_for": ["Remaining knob-and-tube", "Cloth NM with degraded insulation", "Ungrounded circuits", "Service capacity"]
+      },
+      "plumbing_supply": {
+        "likely": ["Galvanized steel dominant", "Copper emerging", "Lead solder still in use", "Lead service line possible early"],
+        "inspect_for": ["Galvanized corrosion (at/near end of life)", "Lead solder joints", "Possible lead service line", "Flow/pressure loss"]
+      },
+      "plumbing_waste": { "likely": ["Cast iron DWV"], "inspect_for": ["Cast iron deterioration", "Improper venting"] },
+      "panel": { "likely": ["Fuse panel (60A typical)"], "inspect_for": ["Fuse panel upgrade", "Undersized for modern appliances"] },
+      "hazards": { "likely": ["Lead paint", "Asbestos (insulation, floor tile, pipe wrap)", "Lead solder"], "inspect_for": ["Lead-based paint (assume present)", "Asbestos floor tile / pipe wrap / siding", "Lead service line check"] },
+      "foundation": { "likely": ["Poured concrete becoming standard", "Concrete block"], "inspect_for": ["Cracking", "Moisture/efflorescence", "Older rebar practices"] },
+      "heating": { "likely": ["Gravity furnace; oil heat common"], "inspect_for": ["Asbestos insulation on ducts/pipes", "Buried oil tanks (environmental)"] },
+      "insulation": { "likely": ["Minimal; some early batt"], "inspect_for": ["Low/no insulation", "Asbestos-containing types"] },
+      "roofing": { "likely": ["Asphalt shingle standard"], "inspect_for": ["Layer count", "Sheathing"] },
+      "windows": { "likely": ["Single-pane wood"], "inspect_for": ["Single-pane windows (energy loss / replacement candidate)", "Lead paint", "Air leakage"] }
+    },
+
+    {
+      "id": "1950_1964",
+      "label": "1950–1964",
+      "year_min": 1950,
+      "year_max": 1964,
+      "electrical": {
+        "likely": ["Cloth-jacketed NM (Romex) dominant", "Often ungrounded or reduced/early ground", "Breaker panels appearing alongside fuses", "100A service emerging"],
+        "inspect_for": ["Ungrounded NM", "Cloth NM insulation condition", "Early grounding gaps", "Service capacity (often 60–100A)"]
+      },
+      "plumbing_supply": {
+        "likely": ["Copper becoming standard", "Galvanized still present", "Lead solder on copper"],
+        "inspect_for": ["Lead solder joints (pre-1986)", "Remaining galvanized (end of life)", "Copper pinhole corrosion in aggressive water"]
+      },
+      "plumbing_waste": { "likely": ["Cast iron DWV; ABS/PVC not yet common"], "inspect_for": ["Cast iron condition", "Venting to current code"] },
+      "panel": { "likely": ["Mix of fuse and early breaker panels (often 60–100A)"], "inspect_for": ["Service upgrade", "Early breaker brands of concern"] },
+      "hazards": { "likely": ["Lead paint", "Asbestos (tile, pipe wrap, popcorn ceilings emerging, siding)", "Lead solder"], "inspect_for": ["Lead-based paint (pre-1978)", "Asbestos floor tile/mastic/pipe wrap", "Lead solder"] },
+      "foundation": { "likely": ["Poured concrete; slab-on-grade common in warm regions"], "inspect_for": ["Slab cracks/heave", "Crawlspace moisture", "Settlement"] },
+      "heating": { "likely": ["Forced-air gas furnace becoming standard"], "inspect_for": ["Asbestos on older ducting", "Heat exchanger age"] },
+      "insulation": { "likely": ["Batt insulation in walls/attic, modest R-value"], "inspect_for": ["Under-insulated to modern standards", "Asbestos-containing types"] },
+      "roofing": { "likely": ["3-tab asphalt shingle"], "inspect_for": ["Layers", "Ventilation"] },
+      "windows": { "likely": ["Single-pane; aluminum frames emerging"], "inspect_for": ["Single-pane windows (energy loss / replacement candidate)", "Lead paint (wood)", "Thermal inefficiency"] }
+    },
+
+    {
+      "id": "1965_1979",
+      "label": "1965–1979",
+      "year_min": 1965,
+      "year_max": 1979,
+      "electrical": {
+        "likely": ["Grounded NM (Romex) standard", "ALUMINUM branch wiring window (~1965–1973) — major flag", "Breaker panels standard", "100–150A service", "Federal Pacific / Zinsco panels in use (defective)"],
+        "inspect_for": ["Aluminum branch-circuit wiring (FIRE RISK — check devices/connections)", "Federal Pacific Stab-Lok / Zinsco panels (recall-level concern)", "Service capacity", "Early grounded NM condition"]
+      },
+      "plumbing_supply": {
+        "likely": ["Copper standard", "Lead solder until 1986", "Polybutylene (gray) appearing late 1970s"],
+        "inspect_for": ["Lead solder (pre-1986)", "Polybutylene piping (failure-prone — flag)", "Copper condition"]
+      },
+      "plumbing_waste": { "likely": ["Cast iron and/or ABS/PVC plastic DWV"], "inspect_for": ["Mixed materials", "ABS condition"] },
+      "panel": { "likely": ["Breaker panel (100–150A)", "Federal Pacific / Zinsco present"], "inspect_for": ["Federal Pacific Stab-Lok / Zinsco (replace-level)", "Aluminum feeders"] },
+      "hazards": { "likely": ["Lead paint until 1978", "Asbestos (popcorn ceilings, tile, insulation) until ~late 1970s"], "inspect_for": ["Lead-based paint (pre-1978 — flag the boundary)", "Asbestos popcorn ceiling / tile / insulation", "Aluminum wiring"] },
+      "foundation": { "likely": ["Poured concrete; slab common"], "inspect_for": ["Slab cracking", "Drainage"] },
+      "heating": { "likely": ["Forced-air gas; central AC spreading"], "inspect_for": ["Asbestos on older systems", "Aging equipment", "R-22 refrigerant (phased out 2010; recharge/replacement cost if AC present)"] },
+      "insulation": { "likely": ["Batt; some UFFI (urea-formaldehyde) late 1970s"], "inspect_for": ["UFFI (off-gassing concern)", "Under-insulation"] },
+      "roofing": { "likely": ["Asphalt shingle"], "inspect_for": ["Layers", "Ventilation"] },
+      "windows": { "likely": ["Single-pane / early double-pane; aluminum frames"], "inspect_for": ["Single-pane windows where present (energy loss)", "Aluminum frame thermal bridging", "Failed early IGUs"] }
+    },
+
+    {
+      "id": "1980_1999",
+      "label": "1980–1999",
+      "year_min": 1980,
+      "year_max": 1999,
+      "electrical": {
+        "likely": ["Modern grounded NM-B", "Copper branch wiring", "Breaker panels 150–200A", "GFCI required (kitchens/baths phased in 1970s–80s)"],
+        "inspect_for": ["Federal Pacific/Zinsco in early-80s builds", "GFCI presence/function", "Service capacity for modern loads"]
+      },
+      "plumbing_supply": {
+        "likely": ["Copper standard", "Lead solder banned 1986 (lead-free after)", "Polybutylene common until ~mid-1990s", "PEX emerging late 1990s"],
+        "inspect_for": ["Polybutylene piping (flag — class-action history)", "Lead solder if pre-1986", "Copper condition"]
+      },
+      "plumbing_waste": { "likely": ["ABS/PVC plastic DWV standard"], "inspect_for": ["Plastic DWV condition", "Venting"] },
+      "panel": { "likely": ["Breaker panel (150–200A)"], "inspect_for": ["Brand of concern in early-80s", "AFCI absent (pre-1999)"] },
+      "hazards": { "likely": ["Lead paint gone (post-1978)", "Asbestos largely phased out (some products into 1980s)", "Radon awareness rising"], "inspect_for": ["Asbestos in early-80s materials", "Radon (region-dependent)", "Polybutylene"] },
+      "foundation": { "likely": ["Poured concrete / block; slab"], "inspect_for": ["Standard settlement/drainage", "Expansive soil regions"] },
+      "heating": { "likely": ["High-efficiency furnaces emerging; central AC standard"], "inspect_for": ["Equipment age (likely past service life)", "Ductwork", "R-22 refrigerant (phased out 2010; recharge/replacement cost if AC present)"] },
+      "insulation": { "likely": ["Improved batt R-values; better attic insulation"], "inspect_for": ["Below current code R-value", "Air sealing"] },
+      "roofing": { "likely": ["Asphalt shingle (architectural emerging)"], "inspect_for": ["Age/remaining life", "Layers"] },
+      "windows": { "likely": ["Double-pane standard; vinyl frames emerging"], "inspect_for": ["Failed IGU seals", "Frame condition"] }
+    },
+
+    {
+      "id": "2000_2009",
+      "label": "2000–2009",
+      "year_min": 2000,
+      "year_max": 2009,
+      "electrical": {
+        "likely": ["Modern NM-B copper", "200A service typical", "AFCI required (bedrooms, 2002+)", "Expanded GFCI"],
+        "inspect_for": ["AFCI/GFCI coverage", "Aluminum only on large feeders (acceptable)", "Generally code-compliant"]
+      },
+      "plumbing_supply": {
+        "likely": ["PEX gaining rapidly", "Copper still used", "Lead-free solder", "Polybutylene gone"],
+        "inspect_for": ["PEX fitting type (early brass fitting concerns)", "Generally modern/serviceable"]
+      },
+      "plumbing_waste": { "likely": ["PVC/ABS DWV"], "inspect_for": ["Standard condition checks"] },
+      "panel": { "likely": ["200A breaker panel with AFCI/GFCI"], "inspect_for": ["Breaker brand", "Adequate capacity"] },
+      "hazards": { "likely": ["No lead paint/asbestos in original", "Chinese drywall window (2001–2009, esp. Gulf states)", "Mold awareness"], "inspect_for": ["Chinese/defective drywall (Gulf region 2001–2009 — corrosion/odor)", "Radon (region-dependent)"] },
+      "foundation": { "likely": ["Modern poured/block; slab"], "inspect_for": ["Standard", "Expansive soil regions"] },
+      "heating": { "likely": ["High-efficiency HVAC"], "inspect_for": ["Approaching mid-life", "SEER/efficiency", "R-22 refrigerant (phased out 2010; recharge/replacement cost on pre-2010 AC)"] },
+      "insulation": { "likely": ["Code-compliant batt/blown; spray foam emerging"], "inspect_for": ["Ventilation with foam", "Generally adequate"] },
+      "roofing": { "likely": ["Architectural asphalt shingle"], "inspect_for": ["Remaining life", "Storm damage"] },
+      "windows": { "likely": ["Double-pane vinyl, Low-E"], "inspect_for": ["Seal failure", "Generally modern"] }
+    },
+
+    {
+      "id": "2010_present",
+      "label": "2010–Present",
+      "year_min": 2010,
+      "year_max": 9999,
+      "electrical": {
+        "likely": ["Modern copper NM-B", "200A+ service", "Whole-house AFCI/GFCI", "Often EV/solar provisions, tamper-resistant receptacles"],
+        "inspect_for": ["Generally code-current", "Solar/EV/battery integration if present", "Workmanship on newer builds"]
+      },
+      "plumbing_supply": { "likely": ["PEX dominant", "Lead-free everywhere"], "inspect_for": ["Manifold/home-run systems", "Generally modern"] },
+      "plumbing_waste": { "likely": ["PVC/ABS DWV"], "inspect_for": ["Standard checks"] },
+      "panel": { "likely": ["200A+ with full AFCI/GFCI"], "inspect_for": ["Smart panels/load centers if present"] },
+      "hazards": { "likely": ["No legacy hazards in original construction"], "inspect_for": ["Radon (region-dependent)", "Workmanship/defects on new builds"] },
+      "foundation": { "likely": ["Modern engineered foundations"], "inspect_for": ["Settlement on new fill", "Drainage/grading"] },
+      "heating": { "likely": ["High-efficiency / heat pumps / mini-splits"], "inspect_for": ["Newer equipment", "Proper sizing/commissioning"] },
+      "insulation": { "likely": ["High R-value, air-sealed; spray foam common"], "inspect_for": ["Ventilation strategy", "Generally high performance"] },
+      "roofing": { "likely": ["Architectural shingle; some metal/tile"], "inspect_for": ["Workmanship", "Warranty"] },
+      "windows": { "likely": ["Double/triple-pane Low-E, vinyl/composite"], "inspect_for": ["Generally modern", "Install quality"] }
+    }
+  ],
+
+  "regional_modifiers": [
+    {
+      "id": "pacific_nw",
+      "label": "Pacific Northwest (WA, OR, N. ID)",
+      "match_states": ["WA", "OR", "ID"],
+      "notes": "Wet climate + significant pre-1940 housing stock (esp. Seattle/Portland). Knob-and-tube persisted later in some areas. High moisture/rot and crawlspace concerns.",
+      "add_inspect_for": ["Moisture intrusion / crawlspace ventilation (wet climate)", "Wood rot at sills, decks, windows", "Knob-and-tube lingering in pre-1940 stock", "Oil heat + buried oil tanks (older homes)", "Moss/roof moisture damage"]
+    },
+    {
+      "id": "seismic_west",
+      "label": "Seismic West (CA, WA, OR, NV, AK)",
+      "match_states": ["CA", "WA", "OR", "NV", "AK"],
+      "notes": "Earthquake country. Older homes often lack seismic retrofits.",
+      "add_inspect_for": ["Foundation bolting / sill-plate anchorage", "Cripple-wall bracing (pre-1960 homes)", "Unreinforced masonry (pre-1940)", "Soft-story conditions", "Water heater strapping"]
+    },
+    {
+      "id": "gulf_southeast",
+      "label": "Gulf & Southeast (FL, TX, LA, MS, AL, GA, SC)",
+      "match_states": ["FL", "TX", "LA", "MS", "AL", "GA", "SC"],
+      "notes": "Hurricane/flood exposure, high humidity, expansive clay soils in parts of TX. Chinese drywall hotspot 2001–2009.",
+      "add_inspect_for": ["Wind/hurricane tie-downs & roof straps", "Flood-zone elevation & past flood damage", "High-humidity mold/moisture", "Expansive clay soil movement (TX)", "Chinese/defective drywall (2001–2009 builds)"]
+    },
+    {
+      "id": "northeast_midwest_cold",
+      "label": "Cold Northeast & Midwest (NY, CT, IL, etc.)",
+      "match_states": ["NY", "CT", "MA", "NJ", "PA", "IL", "MI", "OH", "WI", "MN", "VT", "NH", "ME"],
+      "notes": "Old housing stock, freeze-thaw, basements, oil heat common in Northeast.",
+      "add_inspect_for": ["Basement water intrusion / sump", "Freeze-thaw foundation cracking", "Oil heat + buried/abandoned oil tanks", "Ice-dam roof damage", "Frozen-pipe risk on exterior walls", "Radon (common in Northeast/Midwest)"]
+    },
+    {
+      "id": "southwest_arid",
+      "label": "Arid Southwest (AZ, NM, NV, parts of TX/CA)",
+      "match_states": ["AZ", "NM", "NV"],
+      "notes": "Expansive/collapsible soils, slab-on-grade, intense UV, evaporative cooling.",
+      "add_inspect_for": ["Slab-on-grade cracking / post-tension cables", "Expansive soil movement", "UV roof degradation", "Evaporative cooler condition (older homes)", "Stucco cracking"]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "house-intelligence",
+  "version": "1.0.0",
+  "description": "Construction-era knowledge base: maps a build year (+region) to era-based inspection items for a scope of work.",
+  "main": "lookup_engine.js",
+  "scripts": {
+    "test": "node test_engine.js && node test_address_provider.js && node test_alignment.js",
+    "demo": "node lookup_engine.js 1945 WA",
+    "demo:address": "node address_provider.js \"1730 Minor Ave, Seattle, WA 98101\"",
+    "rows": "node lookup_engine.js --rows SEA"
+  },
+  "engines": { "node": ">=14" },
+  "license": "UNLICENSED",
+  "private": true
+}
