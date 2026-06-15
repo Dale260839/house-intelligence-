@@ -1,7 +1,7 @@
 # Priority #2 — House Intelligence Knowledge Base
 
-_Phase 1 foundation + address layer. Files: `era_dataset.json`, `lookup_engine.js`, `address_provider.js`,
-and tests `test_engine.js`, `test_address_provider.js`, `test_alignment.js` (121 tests, all passing)._
+_Phase 1 foundation + address layer + HTTP API. Files: `era_dataset.json`, `lookup_engine.js`, `address_provider.js`,
+`server.js`, and tests `test_engine.js`, `test_address_provider.js`, `test_alignment.js`, `test_server.js` (138 tests, all passing)._
 
 ---
 
@@ -86,6 +86,44 @@ node address_provider.js "1730 Minor Ave, Seattle, WA 98101"   # address → sco
 
 ---
 
+## HTTP API (deployable)
+
+`server.js` wraps the same engine in a **zero-dependency** HTTP service (Node core
+`http` only — no framework, no `npm install`). Start it locally:
+
+```bash
+npm start                # node server.js  → http://localhost:3000
+PORT=8080 npm start      # hosts inject PORT; HOST defaults to 0.0.0.0
+```
+
+| Method & path | Purpose |
+|---|---|
+| `GET /` | API index + usage (JSON) |
+| `GET /health` | liveness probe → `{ status: "ok" }` |
+| `GET /scope?year=1945&state=WA&metro=SEA` | scope for a known build year |
+| `GET /scope?address=<full address>` | resolve address → year → scope (via provider) |
+| `POST /scope` | JSON body `{ year, state, metro }` **or** `{ address }` |
+| `GET /rows?region=SEA` | blueprint Layer-1 region+era grid (JSON) |
+
+Add `&format=text` (GET) or `"format":"text"` (POST) for the rendered scope block
+instead of JSON. CORS is open (`*`) so a browser frontend can call it directly.
+
+```bash
+curl "http://localhost:3000/scope?address=1730%20Minor%20Ave,%20Seattle,%20WA%2098101"
+curl -X POST http://localhost:3000/scope -H "Content-Type: application/json" \
+     -d '{"year":1968,"state":"IL"}'
+```
+
+**Runs with no vendor adapter:** address lookups use the bundled MockProvider by
+default. To go live, swap one line in `server.js` (the `PROVIDER` constant) for a
+real adapter, e.g. `withCache(createRentcastProvider({ apiKey: process.env.RENTCAST_API_KEY }))`.
+
+**Deploy:** a `Dockerfile` and `Procfile` are included. Any Node host works —
+`node server.js` is the entire start command. Render/Railway/Fly/Heroku read
+`PORT` automatically.
+
+---
+
 ## Alignment with the Dataset Blueprint (#2)
 
 The engine speaks the blueprint's language while keeping a DRY model under the hood:
@@ -161,7 +199,8 @@ This is the foundation. To reach the full spec, the remaining work is **integrat
 | Lookup engine (year+state → scope) | ✅ Built & tested |
 | Blueprint alignment (6 categories, severity, region+era rows, CSV grid) | ✅ Built & tested |
 | Spec example (1940s Seattle) | ✅ Working |
-| Test suite (engine + provider + alignment) | ✅ 121/121 passing |
+| Test suite (engine + provider + alignment + server) | ✅ 138/138 passing |
+| HTTP API (`server.js`, zero-dep) + Docker/Procfile | ✅ Built & tested — deployable |
 | Address → build-year: provider interface + mock | ✅ Built (vendor adapter pending pick) |
 | Address → build-year: live vendor adapter | ⬜ RentCast recommended — confirm schema, then wire |
 | BuildSuite proposal integration | ⬜ Needs Sing |

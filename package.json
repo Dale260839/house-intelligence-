@@ -4,7 +4,8 @@
   "description": "Construction-era knowledge base: maps a build year (+region) to era-based inspection items for a scope of work.",
   "main": "lookup_engine.js",
   "scripts": {
-    "test": "node test_engine.js && node test_address_provider.js && node test_alignment.js",
+    "start": "node server.js",
+    "test": "node test_engine.js && node test_address_provider.js && node test_alignment.js && node test_server.js",
     "demo": "node lookup_engine.js 1945 WA",
     "demo:address": "node address_provider.js \"1730 Minor Ave, Seattle, WA 98101\"",
     "rows": "node lookup_engine.js --rows SEA"
