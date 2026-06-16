@@ -1,0 +1,16 @@
+{
+  "name": "material-takeoff",
+  "version": "1.0.0",
+  "description": "Material Takeoff: maps a project scope + size to an order-ready material quantity list. Sibling to House Intelligence in the same repo (same engine pattern + HTTP stack, separate service). v1: kitchen remodel.",
+  "main": "takeoff_engine.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test_engine.js && node test_server.js",
+    "demo": "node takeoff_engine.js 200",
+    "demo:json": "node takeoff_engine.js 200 --json",
+    "types": "node takeoff_engine.js --types"
+  },
+  "engines": { "node": ">=14" },
+  "license": "UNLICENSED",
+  "private": true
+}

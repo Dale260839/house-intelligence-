@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Material Takeoff — Test Page</title>
+<style>
+  :root { --ink:#1c2733; --muted:#5b6b7b; --line:#dde3ea; --bg:#f4f6f9; --accent:#1f6feb; --warn:#b54708; }
+  * { box-sizing: border-box; }
+  body { font: 15px/1.5 -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color: var(--ink); background: var(--bg); margin: 0; padding: 24px; }
+  .wrap { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 2px; }
+  .sub { color: var(--muted); margin: 0 0 18px; }
+  .grid { display: grid; grid-template-columns: 340px 1fr; gap: 18px; align-items: start; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 10px 0 4px; }
+  label .hint { font-weight: 400; color: var(--muted); }
+  input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; font: inherit; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  .check input { width: auto; }
+  button { margin-top: 16px; width: 100%; background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 11px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:hover { background: #1a5fd0; }
+  .endpoint { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--muted); margin-top: 6px; word-break: break-all; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .order { font-weight: 700; }
+  .fv { color: var(--warn); font-size: 11px; font-weight: 700; }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 999px; background: #eef2f7; color: var(--muted); margin-left: 6px; }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 0 6px; }
+  .chk li { margin: 3px 0; }
+  .summary { background: #eef5ff; border: 1px solid #cfe0ff; border-radius: 8px; padding: 10px 12px; font-size: 13.5px; margin-bottom: 12px; }
+  .disclaimer { color: var(--warn); font-size: 12.5px; margin-top: 16px; border-top: 1px dashed var(--line); padding-top: 10px; }
+  .error { background: #fff1f0; border: 1px solid #ffccc7; color: #a8071a; border-radius: 8px; padding: 12px; }
+  details { margin-top: 14px; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  pre { background: #0d1117; color: #c9d1d9; padding: 12px; border-radius: 8px; overflow:auto; font-size: 11.5px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Material Takeoff <span class="muted">— test page</span></h1>
+  <p class="sub">Calls the local <code>POST /material-takeoff</code> endpoint. House Intelligence's sibling: tells a contractor what to <strong>buy</strong>.</p>
+
+  <div class="grid">
+    <!-- ── input form ── -->
+    <form class="card" id="form">
+      <label>API base URL <span class="hint">(where server.js is running)</span></label>
+      <input id="apiBase" value="http://localhost:3100" />
+
+      <label>Project type</label>
+      <select id="projectType"><option value="kitchen_remodel">kitchen_remodel</option></select>
+
+      <label>Kitchen floor area <span class="hint">(sqft, required)</span></label>
+      <input id="kitchenSqft" type="number" value="200" min="1" />
+
+      <div class="row2">
+        <div>
+          <label>Ceiling height <span class="hint">(ft)</span></label>
+          <input id="ceilingHeight" type="number" value="8" />
+        </div>
+        <div>
+          <label>Openings <span class="hint">(doors/windows)</span></label>
+          <input id="openings" type="number" value="2" />
+        </div>
+      </div>
+
+      <div class="row2">
+        <div>
+          <label>Tile layout</label>
+          <select id="tileLayout">
+            <option value="straight">straight (7%)</option>
+            <option value="diagonal">diagonal (15%)</option>
+            <option value="herringbone">herringbone (20%)</option>
+            <option value="mosaic">mosaic (20%)</option>
+          </select>
+        </div>
+        <div>
+          <label>Countertop</label>
+          <select id="countertopType">
+            <option value="solid">solid (+15%)</option>
+            <option value="veined">veined (+25%)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row2">
+        <div>
+          <label>Cabinet LF <span class="hint">(optional, known)</span></label>
+          <input id="cabinetLF" type="number" placeholder="auto from sqft" />
+        </div>
+        <div>
+          <label>Countertop sqft <span class="hint">(optional)</span></label>
+          <input id="countertopSqft" type="number" placeholder="auto" />
+        </div>
+      </div>
+
+      <label>Backsplash height <span class="hint">(in; 0 = none)</span></label>
+      <input id="backsplashHeight" type="number" value="18" />
+
+      <div class="check"><input id="floorTile" type="checkbox" checked /><label style="margin:0">Tiling the floor</label></div>
+      <div class="check"><input id="includeCeiling" type="checkbox" /><label style="margin:0">Re-rock the ceiling too</label></div>
+
+      <button type="submit">Generate takeoff →</button>
+      <div class="endpoint" id="curl"></div>
+    </form>
+
+    <!-- ── results ── -->
+    <div class="card" id="out">
+      <p class="muted">Fill in the form and hit <strong>Generate takeoff</strong>. The order list shows the raw measurement, the waste % / coverage, and the final order quantity for each material.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const num = v => v === '' || v == null ? undefined : Number(v);
+
+function buildBody() {
+  const b = {
+    projectType: $('projectType').value,
+    kitchenSqft: num($('kitchenSqft').value),
+    ceilingHeight: num($('ceilingHeight').value),
+    openings: num($('openings').value),
+    tileLayout: $('tileLayout').value,
+    countertopType: $('countertopType').value,
+    backsplashHeight: num($('backsplashHeight').value),
+    floorTile: $('floorTile').checked,
+    includeCeiling: $('includeCeiling').checked,
+  };
+  const cab = num($('cabinetLF').value); if (cab) b.cabinetLF = cab;
+  const ct = num($('countertopSqft').value); if (ct) b.countertopSqft = ct;
+  return b;
+}
+
+function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
+
+function mathCell(m) {
+  if (m.type === 'made_to_measure') return `${m.raw} ${m.raw_unit} <span class="tag">made-to-measure</span>`;
+  if (m.type === 'waste_factor')   return `${m.raw} ${m.raw_unit} <span class="tag">+${m.waste_pct}% waste</span>`;
+  return `${m.raw} ${m.raw_unit} <span class="tag">@ ${m.coverage} ${m.coverage_unit}</span>`;
+}
+
+function render(t) {
+  if (!t.ok) { $('out').innerHTML = `<div class="error"><strong>${esc(t.error || 'error')}</strong><br>${esc(t.message || '')}</div>`; return; }
+  let rows = t.materials.map(m => `
+    <tr>
+      <td>${esc(m.label)}${m.field_verify ? ' <span class="fv">FIELD-VERIFY</span>' : ''}<div class="muted" style="font-size:11px">${esc(m.basis || '')}</div></td>
+      <td>${mathCell(m)}</td>
+      <td class="num order">${m.order_qty} <span class="muted">${esc(m.order_unit)}</span></td>
+    </tr>`).join('');
+
+  const plumb = t.fixtures_checklist.plumbing.map(f => `<li><strong>${f.qty} ${esc(f.unit)}</strong> — ${esc(f.item)}</li>`).join('');
+  const elec = t.fixtures_checklist.electrical.map(f => `<li><strong>${f.qty} ${esc(f.unit)}</strong> — ${esc(f.item)}${f.estimate ? ' <span class="muted">(est.)</span>' : ''}</li>`).join('');
+
+  $('out').innerHTML = `
+    <div class="summary">${esc(t.summary)}</div>
+    <table>
+      <thead><tr><th>Material</th><th>Raw → waste / coverage</th><th class="num">Order</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <h3>Plumbing / rough-in checklist</h3><ul class="chk">${plumb}</ul>
+    <h3>Electrical / rough-in checklist</h3><ul class="chk">${elec}</ul>
+    <div class="disclaimer">⚠ ${esc(t.disclaimer)}</div>
+    <details><summary>Raw JSON response</summary><pre>${esc(JSON.stringify(t, null, 2))}</pre></details>`;
+}
+
+$('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const base = $('apiBase').value.replace(/\/+$/, '');
+  const body = buildBody();
+  $('curl').textContent = `POST ${base}/material-takeoff  ${JSON.stringify(body)}`;
+  $('out').innerHTML = '<p class="muted">Calling API…</p>';
+  try {
+    const res = await fetch(base + '/material-takeoff', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    render(await res.json());
+  } catch (err) {
+    $('out').innerHTML = `<div class="error"><strong>Request failed:</strong> ${esc(err.message)}<br>
+      Is the API running? Start it with <code>node server.js</code> in the material-takeoff folder, then check the API base URL above.</div>`;
+  }
+});
+
+// Auto-run once on load so the page shows the canonical 200 sqft example immediately.
+$('form').dispatchEvent(new Event('submit'));
+</script>
+</body>
+</html>

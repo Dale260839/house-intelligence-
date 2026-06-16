@@ -1,0 +1,192 @@
+/**
+ * Material Takeoff — HTTP API server
+ * ----------------------------------
+ * A thin, dependency-free HTTP layer over the takeoff engine — the SAME pattern and
+ * stack as House Intelligence's server.js (Node core `http`, manual CORS headers,
+ * JSON in/out, clean JSON errors). It exposes the exact logic the CLI uses; nothing
+ * about the engine or dataset changes. This is just a deployable front door that
+ * BuildSuite can call over HTTP.
+ *
+ * Built on Node's core `http` module ON PURPOSE: zero runtime dependencies, so
+ * `node server.js` is all any host (Render, Railway, Fly, Heroku, a bare VM, Docker)
+ * needs — no `npm install`, no framework.
+ *
+ * It runs alongside House Intelligence in the same repo but is a SEPARATE service:
+ * its own folder, its own server. Default port is 3100 (House Intelligence defaults
+ * to 3000) so both can run locally at once; hosts inject PORT.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ENDPOINTS
+ *
+ *   GET  /                              → API index + usage (JSON)
+ *   GET  /health                        → liveness probe { status: 'ok' }
+ *
+ *   GET  /material-takeoff/project-types
+ *                                       → supported project types + required/optional
+ *                                         input fields (types/defaults) so a client can
+ *                                         render a form dynamically. (v1: kitchen_remodel)
+ *
+ *   POST /material-takeoff
+ *          { "projectType":"kitchen_remodel", "kitchenSqft":200, ...optional }
+ *                                       → the full takeoff JSON (order quantities + raw +
+ *                                         waste % + fixtures checklist). Bad/missing input
+ *                                         returns 400 with a clear message.
+ *
+ *   GET  /material-takeoff?projectType=kitchen_remodel&kitchenSqft=200[&...]
+ *                                       → same as POST, query-driven (handy for a browser).
+ *
+ * Add &format=text (GET) or "format":"text" (POST) for a rendered text block.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+const http = require('http');
+const { URL } = require('url');
+
+const {
+  buildTakeoff, getProjectTypes, renderTakeoffText, loadDataset,
+} = require('./takeoff_engine.js');
+
+// Load the dataset once at boot and reuse it for every request (it never changes at
+// runtime). Saves a file read per call.
+const DATASET = loadDataset();
+
+const PORT = Number(process.env.PORT) || 3100;
+const HOST = process.env.HOST || '0.0.0.0';
+
+// ─── small helpers (same shape as House Intelligence's server) ───────────────
+
+function sendJson(res, status, payload) {
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Access-Control-Allow-Origin': '*',           // allow browser frontends
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  });
+  res.end(body);
+}
+
+function sendText(res, status, text) {
+  const body = String(text);
+  res.writeHead(status, {
+    'Content-Type': 'text/plain; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(body);
+}
+
+// Read and JSON-parse a request body, capped so a giant payload can't OOM us.
+function readJsonBody(req, limit = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let raw = '';
+    let aborted = false;
+    req.on('data', chunk => {
+      raw += chunk;
+      if (raw.length > limit) { aborted = true; reject(new Error('payload_too_large')); req.destroy(); }
+    });
+    req.on('end', () => {
+      if (aborted) return;
+      if (!raw.trim()) return resolve({});
+      try { resolve(JSON.parse(raw)); }
+      catch { reject(new Error('invalid_json')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+function isTextFormat(v) {
+  return String(v || '').toLowerCase() === 'text';
+}
+
+// Numeric/boolean query params arrive as strings; the engine's resolveInputs() coerces
+// them, so we pass the raw param bag straight through.
+
+// ─── route handlers ──────────────────────────────────────────────────────────
+
+function handleIndex(res) {
+  sendJson(res, 200, {
+    name: 'Material Takeoff API',
+    version: require('./package.json').version,
+    status: 'ok',
+    sibling_of: 'House Intelligence (same repo, same stack, separate service)',
+    endpoints: {
+      'GET /health': 'liveness probe',
+      'GET /material-takeoff/project-types': 'supported project types + input form contract',
+      'POST /material-takeoff': 'body: { projectType, kitchenSqft, ...optional } -> full takeoff',
+      'GET /material-takeoff?projectType=kitchen_remodel&kitchenSqft=200': 'same, query-driven',
+      hint: 'add &format=text (GET) or "format":"text" (POST) for a rendered block',
+    },
+  });
+}
+
+function handleProjectTypes(res) {
+  const types = getProjectTypes(DATASET);
+  sendJson(res, 200, { ok: true, count: types.length, project_types: types });
+}
+
+// Core dispatch shared by GET (query params) and POST (body).
+function handleTakeoff(res, params) {
+  const takeoff = buildTakeoff(params, DATASET);
+
+  // Validation failures (ok:false) are client errors -> 400 with the clear message.
+  if (!takeoff.ok) {
+    if (isTextFormat(params.format)) return sendText(res, 400, takeoff.message);
+    return sendJson(res, 400, takeoff);
+  }
+
+  if (isTextFormat(params.format)) return sendText(res, 200, renderTakeoffText(takeoff));
+  return sendJson(res, 200, takeoff);
+}
+
+// ─── server ──────────────────────────────────────────────────────────────────
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (req.method === 'OPTIONS') {            // CORS preflight
+      res.writeHead(204, {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      });
+      return res.end();
+    }
+
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+    const query = Object.fromEntries(url.searchParams.entries());
+
+    if (req.method === 'GET' && path === '/') return handleIndex(res);
+    if (req.method === 'GET' && path === '/health') {
+      return sendJson(res, 200, { status: 'ok', uptime_s: Math.round(process.uptime()) });
+    }
+    if (req.method === 'GET' && path === '/material-takeoff/project-types') return handleProjectTypes(res);
+    if (req.method === 'GET' && path === '/material-takeoff') return handleTakeoff(res, query);
+
+    if (req.method === 'POST' && path === '/material-takeoff') {
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+      return handleTakeoff(res, { ...body });
+    }
+
+    return sendJson(res, 404, { ok: false, error: 'not_found',
+      message: `No route for ${req.method} ${path}. See GET / for usage.` });
+  } catch (err) {
+    // Last-resort guard: never leak a stack to the client, but log it server-side.
+    console.error('[server] unhandled error:', err);
+    if (!res.headersSent) sendJson(res, 500, { ok: false, error: 'internal_error' });
+  }
+});
+
+// Only listen when run directly (`node server.js`), so tests can import the server
+// without binding a port.
+if (require.main === module) {
+  server.listen(PORT, HOST, () => {
+    console.log(`Material Takeoff API listening on http://${HOST}:${PORT}`);
+    console.log('Try:  curl -X POST http://localhost:' + PORT + '/material-takeoff -H "Content-Type: application/json" -d \'{"projectType":"kitchen_remodel","kitchenSqft":200}\'');
+  });
+}
+
+module.exports = { server };

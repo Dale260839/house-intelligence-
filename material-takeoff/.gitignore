@@ -1,0 +1,11 @@
+# Dependencies (none today — engine is dependency-free)
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/

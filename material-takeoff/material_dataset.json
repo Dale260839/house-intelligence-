@@ -1,0 +1,226 @@
+{
+  "_meta": {
+    "name": "Material Takeoff — Quantity Knowledge Base",
+    "version": "1.0",
+    "scope": "kitchen_remodel_us",
+    "description": "Maps a project scope + size to an order-ready material quantity list. Same engine pattern as House Intelligence (a dataset of rules + a lookup engine), pointed at a different question: House Intelligence says what to INSPECT, Material Takeoff says what to BUY. Quantities already include standard waste factors, and the engine also reports the raw measurement + the waste % so the math is transparent and auditable. v1 covers ONE project type: kitchen_remodel.",
+    "disclaimer": "This is an order-ready STARTING POINT computed from typical estimating standards, NOT a substitute for field measurement. Cabinets and countertops are MADE-TO-MEASURE: always field-verify before ordering those. Verify all quantities against the actual jobsite before purchasing.",
+    "principles": [
+      "No waste, no shortage: waste factors are applied so you do not run short; coverage rates are deliberately conservative (e.g. thinset 75 sqft/bag, not 90+) so the order does not fall short.",
+      "Show the math: every line carries the raw measurement, the waste % (or coverage rate), and the final order quantity so the number is auditable.",
+      "Made-to-measure items (cabinets, countertops) carry no blind waste factor and must be field-verified."
+    ],
+    "sources": [
+      "Drywall: 4x8 sheet = 32 sqft; waste 10% standard / 15% kitchens (cutouts). Joint compound ~25-30 lb per 100 sqft (Level 4). Tape ~2-3 sqft per linear ft.",
+      "Tile waste: 5-7% straight-lay, 10-15% diagonal, 15-20% mosaic/herringbone. One dye lot.",
+      "Cabinets: linear feet, made-to-measure (no waste factor), field-verify. 200 sqft kitchen ~= 35-45 LF total (~60% base / ~40% upper); 100 sqft / 10x10 ~= 20 LF.",
+      "Countertop: ~1.0 sqft finished per LF of base run; raw slab +15% (solid) to +25% (veined / pattern-matched).",
+      "Thinset: ~75-80 sqft per 50 lb bag (1/4 x 1/4 trowel).",
+      "Grout: ~100 sqft per 25 lb bag (12in tile, 1/8in joints); smaller tile / mosaic uses more."
+    ],
+    "supported_project_types": ["kitchen_remodel"],
+    "last_reviewed": "2026-06-17"
+  },
+
+  "project_types": {
+    "kitchen_remodel": {
+      "id": "kitchen_remodel",
+      "label": "Full Kitchen Remodel",
+      "summary": "Quantified order list for a full kitchen remodel: cabinets, countertop, backsplash + floor tile and setting materials, drywall, and a plumbing / electrical rough-in checklist.",
+
+      "inputs": [
+        {
+          "name": "kitchenSqft",
+          "type": "number",
+          "required": true,
+          "min": 1,
+          "unit": "sqft",
+          "description": "Kitchen FLOOR area in square feet. Drives every derived quantity."
+        },
+        {
+          "name": "ceilingHeight",
+          "type": "number",
+          "required": false,
+          "default": 8,
+          "min": 1,
+          "unit": "ft",
+          "description": "Wall height, for drywall wall-area calculation."
+        },
+        {
+          "name": "cabinetLF",
+          "type": "number",
+          "required": false,
+          "default": null,
+          "unit": "LF",
+          "description": "Known TOTAL cabinet linear feet (base + upper). If omitted, derived from floor area. If given, split 60% base / 40% upper unless baseCabinetLF / upperCabinetLF are also given."
+        },
+        {
+          "name": "baseCabinetLF",
+          "type": "number",
+          "required": false,
+          "default": null,
+          "unit": "LF",
+          "description": "Known base-cabinet linear feet. Overrides the base split. Also drives countertop and backsplash if those are not given."
+        },
+        {
+          "name": "upperCabinetLF",
+          "type": "number",
+          "required": false,
+          "default": null,
+          "unit": "LF",
+          "description": "Known upper-cabinet linear feet. Overrides the upper split. Drives under-cabinet lighting length."
+        },
+        {
+          "name": "countertopSqft",
+          "type": "number",
+          "required": false,
+          "default": null,
+          "unit": "sqft",
+          "description": "Known FINISHED countertop area. If omitted, derived as ~1.0 sqft per LF of base run."
+        },
+        {
+          "name": "countertopType",
+          "type": "enum",
+          "required": false,
+          "default": "solid",
+          "allowed": ["solid", "veined"],
+          "description": "Slab waste differs: 'solid' = +15% slab waste, 'veined' = +25% (pattern-matched)."
+        },
+        {
+          "name": "tileLayout",
+          "type": "enum",
+          "required": false,
+          "default": "straight",
+          "allowed": ["straight", "diagonal", "herringbone", "mosaic"],
+          "description": "Tile layout for backsplash + floor. Sets the tile waste %: straight 7%, diagonal 15%, herringbone 20%, mosaic 20%."
+        },
+        {
+          "name": "floorTile",
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "description": "Whether the floor is being tiled. Drives floor tile, and contributes to thinset + grout. Set false for LVP / wood / existing floor."
+        },
+        {
+          "name": "backsplashHeight",
+          "type": "number",
+          "required": false,
+          "default": 18,
+          "unit": "in",
+          "description": "Backsplash height between counter and uppers. 18in is standard; use 0 to skip backsplash."
+        },
+        {
+          "name": "openings",
+          "type": "number",
+          "required": false,
+          "default": 2,
+          "min": 0,
+          "unit": "count",
+          "description": "Number of door/window openings, deducted from drywall wall area (~15 sqft each)."
+        },
+        {
+          "name": "wallPerimeterLF",
+          "type": "number",
+          "required": false,
+          "default": null,
+          "unit": "LF",
+          "description": "Known wall perimeter. If omitted, estimated as 4 * sqrt(floor area) (square-room approximation)."
+        },
+        {
+          "name": "includeCeiling",
+          "type": "boolean",
+          "required": false,
+          "default": false,
+          "description": "Add the ceiling (= floor area) to the drywall quantity. Default false (most remodels keep the ceiling)."
+        }
+      ],
+
+      "geometry": {
+        "perimeter_model": "4 * sqrt(floorSqft)",
+        "perimeter_note": "Square-room approximation; override with wallPerimeterLF when the real perimeter is known (galley / L-shaped rooms have more wall).",
+        "cabinet_lf_per_sqft": 0.20,
+        "cabinet_lf_per_sqft_note": "Calibrated to: 100 sqft -> 20 LF total, 200 sqft -> 40 LF total. Scales with FLOOR AREA (not perimeter) so larger kitchens are not under-counted.",
+        "base_share": 0.60,
+        "upper_share": 0.40,
+        "countertop_sqft_per_base_lf": 1.0,
+        "backsplash_height_in_default": 18,
+        "opening_deduct_sqft": 15
+      },
+
+      "rates": {
+        "cabinets": {
+          "made_to_measure": true,
+          "waste_pct": 0,
+          "note": "Linear feet, made-to-measure -> NO waste factor. Always field-verify before ordering."
+        },
+        "countertop": {
+          "sqft_per_base_lf": 1.0,
+          "waste_pct_solid": 0.15,
+          "waste_pct_veined": 0.25,
+          "made_to_measure": true,
+          "note": "Raw = finished sqft (~1.0 per base LF). Slab order adds 15% (solid) to 25% (veined) cutting waste. Field-verify."
+        },
+        "tile": {
+          "waste_by_layout": {
+            "straight": 0.07,
+            "diagonal": 0.15,
+            "herringbone": 0.20,
+            "mosaic": 0.20
+          },
+          "waste_note": "Top of each sourced band, chosen for the no-shortage promise (straight 5-7%, diagonal 10-15%, mosaic/herringbone 15-20%). Order from ONE dye lot."
+        },
+        "thinset": {
+          "coverage_sqft_per_bag": 75,
+          "bag_lb": 50,
+          "note": "~75-80 sqft per 50 lb bag at 1/4 x 1/4 trowel. We use 75 (low end) so the order does not fall short. Applied to the substrate area being set (backsplash + floor)."
+        },
+        "grout": {
+          "coverage_sqft_per_bag": 100,
+          "coverage_sqft_per_bag_small_tile": 50,
+          "bag_lb": 25,
+          "note": "~100 sqft per 25 lb bag for ~12in tile / 1/8in joints. Mosaic / small tile uses roughly double the grout, so coverage drops to ~50 sqft/bag for the 'mosaic' layout."
+        },
+        "drywall": {
+          "sheet_sqft": 32,
+          "waste_pct": 0.15,
+          "note": "4x8 sheet = 32 sqft. 15% waste for kitchens (cutouts) per standard. Wall area = perimeter * ceiling height, minus openings."
+        },
+        "joint_compound": {
+          "lb_per_100sqft": 30,
+          "bucket_lb": 61.7,
+          "note": "~25-30 lb per 100 sqft (Level 4 finish); we use 30 (high end). Sold as ~4.5-gal (~61.7 lb) ready-mix buckets."
+        },
+        "drywall_tape": {
+          "sqft_per_lf": 2,
+          "roll_lf": 250,
+          "note": "Tape covers ~2-3 sqft per linear ft; we use 2 (more tape) so seams are covered. Sold in 250 ft rolls."
+        },
+        "drywall_screws": {
+          "per_sheet": 32,
+          "per_box": 350,
+          "note": "~32 screws per 4x8 sheet (16in field / 8-12in edges). A 1 lb box of 1-1/4in coarse screws holds ~350."
+        }
+      },
+
+      "fixtures": {
+        "plumbing": [
+          { "item": "Kitchen sink", "qty": 1, "unit": "ea", "note": "Field-verify single vs. double bowl and cabinet fit." },
+          { "item": "Kitchen faucet", "qty": 1, "unit": "ea", "note": "Includes deck plate if required by the sink." },
+          { "item": "Supply lines (hot + cold)", "qty": 2, "unit": "ea", "note": "Braided stainless, sized to the shutoffs." },
+          { "item": "Angle-stop shutoff valves", "qty": 2, "unit": "ea", "note": "One hot, one cold under the sink." },
+          { "item": "P-trap assembly", "qty": 1, "unit": "set", "note": "With tailpiece and washers." },
+          { "item": "Dishwasher connection (supply + drain / air gap)", "qty": 1, "unit": "set", "note": "Air gap or high loop per local code." },
+          { "item": "Garbage disposal", "qty": 1, "unit": "ea", "note": "Confirm disposal vs. plain basket strainer; size the branch drain." }
+        ],
+        "electrical": [
+          { "item": "GFCI counter receptacles", "qty_per_base_lf": 0.25, "qty_min": 2, "unit": "ea", "note": "NEC: every counter >=12in gets a receptacle and no point along the counter is >24in from one. All counter receptacles GFCI-protected. (~1 per 4 LF of base run.)" },
+          { "item": "Small-appliance branch circuits (20A)", "qty": 2, "unit": "circuit", "note": "NEC minimum two 20A small-appliance circuits serving the counter." },
+          { "item": "Dedicated appliance circuits (dishwasher, disposal, microwave, refrigerator)", "qty": 4, "unit": "circuit", "note": "One dedicated circuit each; confirm which appliances are present." },
+          { "item": "Range / cooktop circuit (240V)", "qty": 1, "unit": "circuit", "note": "240V 40-50A for an electric range; omit if gas." },
+          { "item": "Under-cabinet lighting", "qty_per_upper_lf": 1, "unit": "LF", "note": "Size the run to the upper-cabinet linear feet; one switched/dimmed circuit." },
+          { "item": "Romex / NM cable", "qty_per_circuit_ft": 30, "unit": "ft", "note": "Rough estimate at ~30 ft average run per circuit; size 12/2 (20A) and 14/2 (15A) per the actual circuit count and runs." }
+        ]
+      }
+    }
+  }
+}
