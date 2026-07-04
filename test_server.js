@@ -4,6 +4,15 @@
  * wire. Dependency-free (core http only), same harness style as the other suites.
  */
 const http = require('http');
+// Keep this suite hermetic: force the bundled MockProvider regardless of any real
+// RENTCAST_API_KEY in the environment or .env (a defined-but-empty value is honored
+// by server.js's loader and treated as "no key"). Without this, adding a live key
+// would make these tests hit the RentCast network and flip the mock assertions.
+process.env.RENTCAST_API_KEY = '';
+// Same reasoning for Supabase: force the no-op store so these tests never touch a
+// live Supabase project even if SUPABASE_URL/KEY are present in .env.
+process.env.SUPABASE_URL = '';
+process.env.SUPABASE_KEY = '';
 const { server } = require('./server.js');
 
 let pass = 0, fail = 0;
@@ -82,6 +91,21 @@ function request(port, method, path, body) {
       req.on('error', reject); req.write('{ not json'); req.end();
     });
     check('POST invalid JSON -> 400', badJson.status === 400);
+
+    // POST /intelligence — BuildSuite match context -> scope + persistence outcome
+    const intel = await request(port, 'POST', '/intelligence', {
+      address: '1730 Minor Ave, Seattle, WA 98101',
+      project_id: 'p1', contractor_id: 'c1', client_id: 'cl1', contact_id: 'ghl1',
+    });
+    check('POST /intelligence -> 200 with scope resolved', intel.status === 200 && intel.json.ok === true
+      && intel.json.scope.build_year_source.resolved_year === 1945);
+    check('  → no-op store reports stored:false (no creds in tests)',
+      intel.json.stored && intel.json.stored.ok === true && intel.json.stored.stored === false);
+    check('  → echoed row carries match keys + mapped detail',
+      intel.json.stored.record.contractor_id === 'c1' && intel.json.stored.record.client_id === 'cl1'
+      && intel.json.stored.record.year_built === 1945 && intel.json.stored.record.severity);
+    const intelNoAddr = await request(port, 'POST', '/intelligence', { contractor_id: 'c1' });
+    check('POST /intelligence without address -> 400', intelNoAddr.status === 400 && intelNoAddr.json.error === 'missing_address');
 
     // rows grid
     const rows = await request(port, 'GET', '/rows?region=SEA');

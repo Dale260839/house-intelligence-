@@ -1,6 +1,10 @@
 # Dependencies (none today — engine is dependency-free)
 node_modules/
 
+# Secrets — vendor API keys (RentCast, etc.). Never commit.
+.env
+.env.local
+
 # Logs
 *.log
 npm-debug.log*

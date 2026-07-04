@@ -5,7 +5,7 @@
   "main": "lookup_engine.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test_engine.js && node test_address_provider.js && node test_alignment.js && node test_server.js",
+    "test": "node test_engine.js && node test_address_provider.js && node test_alignment.js && node test_supabase_store.js && node test_server.js",
     "demo": "node lookup_engine.js 1945 WA",
     "demo:address": "node address_provider.js \"1730 Minor Ave, Seattle, WA 98101\"",
     "rows": "node lookup_engine.js --rows SEA"

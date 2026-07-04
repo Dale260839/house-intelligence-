@@ -1,7 +1,7 @@
 # Priority #2 — House Intelligence Knowledge Base
 
-_Phase 1 foundation + address layer + HTTP API. Files: `era_dataset.json`, `lookup_engine.js`, `address_provider.js`,
-`server.js`, and tests `test_engine.js`, `test_address_provider.js`, `test_alignment.js`, `test_server.js` (138 tests, all passing)._
+_Phase 1 foundation + address layer (incl. live RentCast adapter) + HTTP API. Files: `era_dataset.json`, `lookup_engine.js`, `address_provider.js`,
+`server.js`, and tests `test_engine.js`, `test_address_provider.js`, `test_alignment.js`, `test_server.js` (149 tests, all passing)._
 
 ---
 
@@ -48,11 +48,12 @@ a cache decorator + `resolveScopeForAddress()` that chains address → year → 
 inferred from the address (Seattle → `SEA` rows) for region-pilot work.
 
 **4. Tests — proof it works.**
-121 tests across `test_engine.js` (27), `test_address_provider.js` (32), and `test_alignment.js`
-(62). Covers the spec example, era boundaries, new-build/clean cases, bad input, the address
-flow, metro inference, and full Dataset-Blueprint alignment (categories, severity flags, sample
-rows, grid, categorization correctness). An adversarial audit (one agent per blueprint layer)
-drove the latest round of fixes.
+149 tests across `test_engine.js` (27), `test_address_provider.js` (43), `test_alignment.js`
+(62), and `test_server.js` (17). Covers the spec example, era boundaries, new-build/clean cases,
+bad input, the address flow, metro inference, the **live RentCast adapter** (faked transport:
+happy path, header/encoding, missing year, auth/rate-limit/network errors, caching), and full
+Dataset-Blueprint alignment (categories, severity flags, sample rows, grid, categorization
+correctness). An adversarial audit (one agent per blueprint layer) drove an earlier round of fixes.
 
 ### The spec example, working
 
@@ -114,9 +115,11 @@ curl -X POST http://localhost:3000/scope -H "Content-Type: application/json" \
      -d '{"year":1968,"state":"IL"}'
 ```
 
-**Runs with no vendor adapter:** address lookups use the bundled MockProvider by
-default. To go live, swap one line in `server.js` (the `PROVIDER` constant) for a
-real adapter, e.g. `withCache(createRentcastProvider({ apiKey: process.env.RENTCAST_API_KEY }))`.
+**Goes live with just an API key.** The server auto-selects its address provider:
+set `RENTCAST_API_KEY` (in `.env` or the host's env) and it uses the **live RentCast
+adapter** (`createRentcastProvider`); leave it unset and it falls back to the bundled
+MockProvider so the API still runs end-to-end with no key. No code change to switch —
+`GET /` reports which adapter is active under `vendor_adapter`.
 
 **Deploy:** a `Dockerfile` and `Procfile` are included. Any Node host works —
 `node server.js` is the entire start command. Render/Railway/Fly/Heroku read
@@ -199,10 +202,10 @@ This is the foundation. To reach the full spec, the remaining work is **integrat
 | Lookup engine (year+state → scope) | ✅ Built & tested |
 | Blueprint alignment (6 categories, severity, region+era rows, CSV grid) | ✅ Built & tested |
 | Spec example (1940s Seattle) | ✅ Working |
-| Test suite (engine + provider + alignment + server) | ✅ 138/138 passing |
+| Test suite (engine + provider + alignment + server) | ✅ 149/149 passing |
 | HTTP API (`server.js`, zero-dep) + Docker/Procfile | ✅ Built & tested — deployable |
-| Address → build-year: provider interface + mock | ✅ Built (vendor adapter pending pick) |
-| Address → build-year: live vendor adapter | ⬜ RentCast recommended — confirm schema, then wire |
+| Address → build-year: provider interface + mock | ✅ Built |
+| Address → build-year: live RentCast adapter | ✅ Built & tested — set `RENTCAST_API_KEY` to activate (confirm live schema with a real call) |
 | BuildSuite proposal integration | ⬜ Needs Sing |
 | Product name | ⬜ Chris's call |
 | Deeper regional data pass (+ era-gate regional items) | ⬜ Additive, anytime |

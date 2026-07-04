@@ -33,13 +33,29 @@
  *     source:    string,            // provider id that answered
  *     confidence:'exact'|'estimated'|'unknown',
  *     reason?:   string,            // when !ok: 'not_found' | 'year_unknown' | 'provider_error' | ...
+ *     property?: PropertyDetails,   // OPTIONAL richer "what is this house" record (see below)
  *     raw?:      any                // raw provider payload, for debugging/audit
  *   }
+ *
+ *   PropertyDetails (optional, vendor-mapped — "more information about the house"
+ *   for the proposal/UI; the engine NEVER reads it, it only needs the year+state):
+ *   {
+ *     propertyType, squareFootage, bedrooms, bathrooms, lotSize,
+ *     floorCount, roomCount,        // size / layout
+ *     features: { heating, heatingType, cooling, coolingType, garage,
+ *                 garageSpaces, pool, roofType, foundationType,
+ *                 exteriorType, architectureType },  // null fields dropped
+ *     source: string                // provider id the details came from
+ *   }
+ *   Whatever a source can't supply is simply absent — details are best-effort and
+ *   ride alongside the year; they never gate scope generation.
  *
  *   `address` may be a string ("1730 Minor Ave, Seattle, WA 98101") OR an object
  *   ({ line1, city, state, zip }). Use normalizeAddress() to accept both.
  * ─────────────────────────────────────────────────────────────────────────────
  */
+
+const https = require('https');
 
 const { buildScope, loadDataset } = require('./lookup_engine.js');
 
@@ -122,13 +138,37 @@ function inferMetro(address) {
 }
 
 /**
+ * Redfin DEEP-LINK (lead / consumer-context only — explicitly NOT a data source).
+ *
+ * Redfin has no licensed/public data API, and scraping its listings would violate
+ * its ToS — so it can never be the thing that "pulls more info about the house"
+ * (that is RentCast's job; see mapRentcastProperty()). What Redfin IS good for is
+ * the future homeowner-research / lead-gen angle: a "View on Redfin" hand-off from
+ * an address. This builds that link and nothing more — no fetch, no key, no data.
+ *
+ * CAVEAT: Redfin's address→listing pages are JS-generated from internal region ids
+ * and are not stably constructable from a raw address, so we hand off via their
+ * search query. Per the same "confirm the live schema before relying on it" rule
+ * this project applies to the RentCast response, click this once in a real browser
+ * to confirm Redfin still honors it before depending on it in the UI.
+ */
+function redfinSearchUrl(address) {
+  const a = normalizeAddress(address);
+  if (!a.freeform) return null;
+  return 'https://www.redfin.com/search?location=' + encodeURIComponent(a.freeform);
+}
+
+/**
  * MockProvider — deterministic, no network. Drives tests and local dev, and
  * documents exactly the shape a real adapter returns.
  *
- *   fixtures: { [addressKey]: { year:number|null, state?:string } }
+ *   fixtures: { [addressKey]: { year:number|null, state?:string, property?:object } }
  *     - year as a number  -> resolves ok with that year
  *     - year === null     -> simulates "property found but no recorded year"
  *     - key absent         -> simulates "address not found"
+ *     - property (optional) -> a ready-made PropertyDetails block to surface, so
+ *                              the "more info about the house" path is testable
+ *                              with no network (mirrors what RentCast returns).
  */
 function createMockProvider(fixtures = DEFAULT_FIXTURES, id = 'mock') {
   return {
@@ -144,7 +184,8 @@ function createMockProvider(fixtures = DEFAULT_FIXTURES, id = 'mock') {
       }
       if (hit.year == null) {
         return { ok: false, year: null, state: (normalizeStateCode(hit.state) || a.state) || null,
-                 source: id, confidence: 'unknown', reason: 'year_unknown', raw: hit };
+                 source: id, confidence: 'unknown', reason: 'year_unknown',
+                 ...(hit.property ? { property: { source: id, ...hit.property } } : {}), raw: hit };
       }
       return {
         ok: true,
@@ -152,6 +193,7 @@ function createMockProvider(fixtures = DEFAULT_FIXTURES, id = 'mock') {
         state: (normalizeStateCode(hit.state) || a.state) || null,
         source: id,
         confidence: 'exact',
+        ...(hit.property ? { property: { source: id, ...hit.property } } : {}),
         raw: hit
       };
     }
@@ -161,7 +203,12 @@ function createMockProvider(fixtures = DEFAULT_FIXTURES, id = 'mock') {
 // A few realistic fixtures (keys are normalized addresses). The Seattle one is
 // the canonical spec example, now reachable by address instead of raw year.
 const DEFAULT_FIXTURES = {
-  '1730 minor ave seattle wa 98101': { year: 1945, state: 'WA' }, // 1940s Seattle
+  '1730 minor ave seattle wa 98101': { year: 1945, state: 'WA', // 1940s Seattle
+    property: { propertyType: 'Single Family', squareFootage: 1820, bedrooms: 3, bathrooms: 2,
+                lotSize: 5000, floorCount: 2, roomCount: 7,
+                features: { heating: true, heatingType: 'Forced Air', cooling: false,
+                            garage: true, garageSpaces: 1, roofType: 'Asphalt',
+                            foundationType: 'Basement', exteriorType: 'Wood' } } },
   '233 s wacker dr chicago il 60606': { year: 1968, state: 'IL' }, // aluminum-wiring era
   '1 infinite loop cupertino ca 95014': { year: 2022, state: 'CA' }, // new build
   '500 unknownyear rd austin tx 78701': { year: null, state: 'TX' }, // found, no year on record
@@ -246,7 +293,177 @@ async function resolveScopeForAddress(address, options = {}) {
     ok: !!(resolution && resolution.ok),
     reason: resolution && resolution.reason
   };
+  // "More information about the house" — the provider's richer property record, if
+  // any. Display/proposal context only; it does NOT influence the era scope above.
+  scope.property = (resolution && resolution.property) || null;
+  // Redfin hand-off (lead/consumer-context only — never a data source). Always
+  // available since it's derived from the address, independent of the lookup.
+  scope.lead_links = { redfin: redfinSearchUrl(address) };
   return scope;
+}
+
+/**
+ * Minimal HTTPS GET returning a fetch-like response object. Lets the RentCast
+ * adapter stay ZERO-dependency AND run on Node versions without a global `fetch`
+ * (fetch only became global in Node 18; package.json supports node >=14). Tests
+ * inject their own `fetchImpl`, so this never runs under test.
+ */
+function httpsGetJson(url, { headers = {}, timeoutMs = 10000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, { headers }, res => {
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { body += chunk; });
+      res.on('end', () => {
+        const status = res.statusCode || 0;
+        resolve({
+          ok: status >= 200 && status < 300,
+          status,
+          async json() { return body ? JSON.parse(body) : null; },
+          async text() { return body; },
+        });
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(timeoutMs, () => req.destroy(new Error('request_timeout')));
+  });
+}
+
+// Build an object from [key, value] pairs, dropping null/undefined/'' so the
+// payload only ever carries fields the source actually supplied. Returns null if
+// nothing survived (so callers can omit an all-empty block entirely).
+function compact(pairs) {
+  const out = {};
+  for (const [k, v] of pairs) {
+    if (v === null || v === undefined || v === '') continue;
+    out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+const numOrNull = v => (Number.isFinite(Number(v)) && v !== '' && v !== null ? Number(v) : null);
+const strOrNull = v => (typeof v === 'string' && v.trim() ? v.trim() : null);
+const boolOrNull = v => (typeof v === 'boolean' ? v : null);
+
+/**
+ * Map a RentCast /properties record → PropertyDetails (size/layout + features).
+ * This is the "more information about the house" widening: the SAME single API
+ * call already made for the build year also carries the property's size, layout,
+ * and construction features — we were previously discarding all of it. Vendor
+ * field names stay quarantined in here; the engine/orchestrator never see them.
+ *
+ * Scope is deliberately limited to size/layout + features (the chosen fields).
+ * Sale-history / valuation fields are intentionally NOT surfaced.
+ * Returns null when there's no record to map.
+ */
+function mapRentcastProperty(rec, source = 'rentcast') {
+  if (!rec || typeof rec !== 'object') return null;
+  const f = (rec.features && typeof rec.features === 'object') ? rec.features : {};
+  const features = compact([
+    ['heating', boolOrNull(f.heating)],
+    ['heatingType', strOrNull(f.heatingType)],
+    ['cooling', boolOrNull(f.cooling)],
+    ['coolingType', strOrNull(f.coolingType)],
+    ['garage', boolOrNull(f.garage)],
+    ['garageSpaces', numOrNull(f.garageSpaces)],
+    ['pool', boolOrNull(f.pool)],
+    ['roofType', strOrNull(f.roofType)],
+    ['foundationType', strOrNull(f.foundationType)],
+    ['exteriorType', strOrNull(f.exteriorType)],
+    ['architectureType', strOrNull(f.architectureType)],
+  ]);
+  const details = compact([
+    ['propertyType', strOrNull(rec.propertyType)],
+    ['squareFootage', numOrNull(rec.squareFootage)],
+    ['bedrooms', numOrNull(rec.bedrooms)],
+    ['bathrooms', numOrNull(rec.bathrooms)],
+    ['lotSize', numOrNull(rec.lotSize)],
+    ['floorCount', numOrNull(f.floorCount)],
+    ['roomCount', numOrNull(f.roomCount)],
+    ['features', features],
+  ]);
+  if (!details) return null;
+  details.source = source;
+  return details;
+}
+
+/**
+ * RentCast adapter — the live address → build-year source (the recommended MVP
+ * vendor). Implements the provider contract above, so wiring it in is a one-line
+ * swap in server.js; the engine and orchestrator never learn RentCast's field
+ * names. Vendor specifics (verified against RentCast's docs — STILL confirm with a
+ * real test call before relying on it; schemas drift):
+ *
+ *   GET https://api.rentcast.io/v1/properties?address=<Street, City, State, Zip>
+ *   Header: X-Api-Key: <key>
+ *   Body:   an ARRAY of matches even for one address; build year = [0].yearBuilt
+ *   License: explicitly permits display/resale/distribution of data to 3rd parties
+ *            (so withCache() is allowed). Free 50/mo, then $74/mo for 1,000 calls.
+ *
+ * opts:
+ *   apiKey    — RentCast key (defaults to process.env.RENTCAST_API_KEY)
+ *   fetchImpl — fetch-like (url, { headers }) -> { ok, status, json() }; defaults
+ *               to the built-in https shim. Inject a fake in tests.
+ *   baseUrl   — override the endpoint (tests / sandbox)
+ */
+function createRentcastProvider(opts = {}) {
+  const apiKey = opts.apiKey || process.env.RENTCAST_API_KEY || '';
+  if (!apiKey) {
+    throw new Error('createRentcastProvider: missing apiKey (set RENTCAST_API_KEY or pass { apiKey }).');
+  }
+  const fetchImpl = opts.fetchImpl || httpsGetJson;
+  const baseUrl = opts.baseUrl || 'https://api.rentcast.io/v1/properties';
+  const id = 'rentcast';
+
+  const fail = (state, reason, raw) =>
+    ({ ok: false, year: null, state: state || null, source: id, confidence: 'unknown', reason, ...(raw !== undefined ? { raw } : {}) });
+
+  return {
+    id,
+    async resolveBuildYear(address) {
+      const a = normalizeAddress(address);
+      if (!a.freeform) return fail(a.state, 'bad_address');
+
+      const url = baseUrl + '?address=' + encodeURIComponent(a.freeform);
+
+      let res;
+      try {
+        res = await fetchImpl(url, { headers: { 'X-Api-Key': apiKey, accept: 'application/json' } });
+      } catch (err) {
+        return fail(a.state, 'provider_error', String((err && err.message) || err));
+      }
+
+      if (!res || !res.ok) {
+        const status = res && res.status;
+        const reason = (status === 401 || status === 403) ? 'auth_error'
+                     : status === 429 ? 'rate_limited'
+                     : status === 404 ? 'not_found'
+                     : 'http_' + (status || 'error');
+        return fail(a.state, reason);
+      }
+
+      let data;
+      try { data = await res.json(); }
+      catch (err) { return fail(a.state, 'provider_error', 'bad_json'); }
+
+      // RentCast returns an ARRAY of matches even for a single address.
+      const rec = Array.isArray(data) ? data[0] : data;
+      if (!rec) return fail(a.state, 'not_found');
+
+      const recState = normalizeStateCode(rec.state) || a.state || null;
+      // Map the richer "what is this house" details from the SAME record — these
+      // ride alongside whether or not a year was found.
+      const property = mapRentcastProperty(rec, id);
+      const year = Number(rec.yearBuilt);
+      if (!Number.isFinite(year) || year <= 0) {
+        const r = fail(recState, 'year_unknown', rec);
+        if (property) r.property = property;
+        return r;
+      }
+
+      return { ok: true, year, state: recState, source: id, confidence: 'exact',
+               ...(property ? { property } : {}), raw: rec };
+    }
+  };
 }
 
 module.exports = {
@@ -255,7 +472,10 @@ module.exports = {
   parseStateFromText,
   addressKey,
   inferMetro,
+  redfinSearchUrl,
+  mapRentcastProperty,
   createMockProvider,
+  createRentcastProvider,
   withCache,
   resolveScopeForAddress,
   DEFAULT_FIXTURES,
@@ -272,7 +492,10 @@ module.exports = {
  * source evaluation. STILL confirm against the live docs (and a real test call)
  * before shipping — schemas drift.
  *
- *   ── RentCast (recommended MVP source) ─────────────────────────────────────
+ *   ── RentCast (recommended MVP source) — ALREADY IMPLEMENTED ───────────────
+ *   See createRentcastProvider() above; this is the live adapter, wired into
+ *   server.js (auto-activates when RENTCAST_API_KEY is set). Kept here for
+ *   reference / parity with the other vendors below.
  *   GET https://api.rentcast.io/v1/properties?address=<Street, City, State, Zip>
  *   Header: X-Api-Key: <key>
  *   Year:   response[0].yearBuilt   (response is an ARRAY even for one address)
@@ -328,6 +551,18 @@ if (require.main === module) {
       console.log('Resolved: year ' + (scope.build_year_source.resolved_year ?? 'unknown') +
                   ' via ' + scope.build_year_source.source +
                   ' (' + scope.build_year_source.confidence + ')');
+      if (scope.property) {
+        const p = scope.property;
+        const bits = [
+          p.propertyType,
+          p.squareFootage && p.squareFootage + ' sqft',
+          (p.bedrooms != null) && p.bedrooms + ' bd',
+          (p.bathrooms != null) && p.bathrooms + ' ba',
+          p.lotSize && p.lotSize + ' sqft lot',
+        ].filter(Boolean);
+        console.log('Property: ' + (bits.join(' · ') || '(details available)'));
+      }
+      console.log('Redfin  : ' + (scope.lead_links && scope.lead_links.redfin || 'n/a'));
       console.log('');
       console.log(renderScopeText(scope));
     })
