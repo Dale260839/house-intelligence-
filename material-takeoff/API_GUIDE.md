@@ -40,6 +40,9 @@ https://house-intelligence-production-f7f6.up.railway.app/material-takeoff?proje
 Add `&format=text` (GET) or `"format":"text"` (POST) to any takeoff call for a rendered text
 block instead of JSON.
 
+Add `price=true` to any takeoff call to attach **live Home Depot pricing + a profit layout**
+(see §4b). Requires `HOMEDEPOT_API_KEY` on the server.
+
 ---
 
 ## 3. Inputs
@@ -143,6 +146,76 @@ appliance circuits, range circuit, under-cabinet lighting, Romex).
 
 ---
 
+## 4b. Pricing & profit layout (opt-in)
+
+Add `price=true` and the takeoff gains a **`pricing`** block: a **live Home Depot unit price**
+for each material line at a chosen **quality tier**, and a **profit layout** (materials + labor →
+cost → markup → client price → profit + margin).
+
+> **Home Depot has no official pricing API.** Live prices come from a third-party service
+> (SerpApi Home Depot, BigBox, …) via a `HOMEDEPOT_API_KEY` set on the server. **Without a key,
+> pricing is unavailable** — the takeoff still returns quantities, and `pricing` comes back
+> `{ "ok": false, "reason": "pricing_unavailable" }`. There is no baked price catalog.
+
+**Pricing inputs** (all optional, sent alongside the normal takeoff inputs):
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `price` | boolean | `false` | Turn pricing on. Everything below is ignored unless this is set. |
+| `tier` | enum | `better` | `good` (builder grade), `better` (mid), `best` (premium). Picks which product/price per line. |
+| `markupPct` | number (%) | `20` | Markup on total cost: `price = cost × (1 + markupPct/100)`. |
+| `laborPct` | number (%) | `100` | Labor as a **percent of material cost**. Default 1:1 is a rough rule of thumb — override per job. |
+| `laborCost` | number ($) | — | Explicit labor dollars. **Overrides `laborPct`** when given. |
+
+**Pricing response** (`takeoff.pricing`):
+
+```jsonc
+{
+  "ok": true,
+  "source": "homedepot_live",          // or "mock" in dev
+  "currency": "USD",
+  "tier": "better", "tier_label": "Better — mid-grade",
+  "lines": [
+    { "key": "thinset", "label": "Thinset mortar", "tier": "better",
+      "order_qty": 4, "order_unit": "50 lb bag", "price_unit": "50 lb bag",
+      "unit_price": 18.0, "line_cost": 72.0, "priced": true,
+      "product_title": "...", "product_url": "https://homedepot.com/p/..." }
+    // ...one per material line
+  ],
+  "unpriced_lines": [ /* lines the price service couldn't match, with a reason */ ],
+  "fully_priced": true,
+  "labor": { "basis": "pct_of_materials", "pct_of_materials": 100, "cost": 10382.0, "note": "..." },
+  "profit_layout": {
+    "materials_cost": 10382.0,
+    "labor_cost":     10382.0,
+    "total_cost":     20764.0,
+    "markup_pct":     20,          // applied markup
+    "price":          24916.80,    // what the client pays
+    "profit":         4152.80,     // price − total_cost
+    "margin_pct":     16.7         // profit ÷ price (the margin that markup implies)
+  },
+  "disclaimer": "Prices are LIVE from a third-party Home Depot pricing API ... budgetary estimate, not a quote ..."
+}
+```
+
+Notes:
+- **Both lenses are shown**: `markup_pct` (the input) and `margin_pct` (the implied gross margin).
+- **Made-to-measure lines** (cabinets, countertop) are priced per LF/sqft as a **rough budget** and
+  carry `field_estimate: true` — never a quote.
+- A price-service outage or unmatched line **never fails the request**: those lines land in
+  `unpriced_lines`, `fully_priced` goes `false`, and the rest still totals.
+- Fixtures (plumbing/electrical rough-in) are **not** individually priced — they're the install
+  scope covered by the labor line.
+
+```bash
+# priced takeoff, premium tier, 25% markup, labor = 90% of materials
+curl -X POST https://house-intelligence-production-f7f6.up.railway.app/material-takeoff \
+  -H "Content-Type: application/json" \
+  -d '{"projectType":"kitchen_remodel","kitchenSqft":200,"price":true,"tier":"best","markupPct":25,"laborPct":90}'
+```
+
+---
+
 ## 5. Errors
 
 Bad/missing input returns **HTTP 400** with a clear JSON message (never a 200 with garbage).
@@ -216,7 +289,10 @@ curl -i -X POST https://house-intelligence-production-f7f6.up.railway.app/materi
    **field-verify before ordering** (the API flags these with `field_verify: true`).
 4. **Cabinet model is calibrated for typical ~80–300 sqft kitchens** (0.20 LF/sqft). Very large
    kitchens or island-heavy layouts should use the `cabinetLF` override.
-5. **No pricing.** Returns quantities, not dollars. No SKUs, no vendor mapping, no cost totals.
+5. **Pricing is opt-in and estimate-grade.** Add `price=true` (§4b) for live Home Depot prices +
+   a profit layout — but it needs a `HOMEDEPOT_API_KEY` (no key → no prices), prices are matched to
+   a per-tier **search term, not your exact SKU**, and labor defaults to a rough rule of thumb. It's
+   a budgetary estimate, not a quote.
 6. **Tile & countertop are returned in sqft, not vendor boxes/slabs.** Consumables
    (thinset/grout/compound/tape/screws) ARE in whole purchasable units; tile you still divide by
    your chosen tile's box coverage.
@@ -244,8 +320,9 @@ not a substitute for field measurement.
 **Product**
 - **More project types** — bathroom remodel, flooring-only, whole-room drywall, etc. The engine is
   data-driven: add a `project_type` block to `material_dataset.json` (no engine rewrite).
-- **Pricing layer** — map quantities → SKUs/vendor prices for dollar totals (vendor-agnostic seam,
-  same pattern House Intelligence uses for its address provider).
+- **Pricing layer — shipped (§4b):** live Home Depot pricing (third-party API), good/better/best
+  tiers, and a markup+margin profit layout with a labor line. Next: exact-SKU pinning, price
+  caching/refresh, and a per-line vendor-pack-size mapping so tile prices are per-box not per-sqft.
 - **Vendor pack-size rounding** — return tile boxes / slab counts, not just sqft.
 - **Per-surface tile layout** + a tile-size input feeding grout/thinset more precisely.
 - **Appliance inputs** (gas vs electric range, microwave type) to branch the electrical checklist.
@@ -266,6 +343,6 @@ not a substitute for field measurement.
 
 ---
 
-_Engine + API are unit-tested (57 engine + 24 HTTP tests). Standards are sourced in
+_Engine + API are unit-tested (57 engine + 48 pricing + 33 HTTP tests). Standards are sourced in
 `material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
 

@@ -37,6 +37,17 @@
   details { margin-top: 14px; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   pre { background: #0d1117; color: #c9d1d9; padding: 12px; border-radius: 8px; overflow:auto; font-size: 11.5px; }
   .muted { color: var(--muted); }
+  .pricing-box { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 14px; background: #fbfcfe; }
+  .money { font-variant-numeric: tabular-nums; }
+  .profit { margin-top: 8px; border: 1px solid #cfe0ff; border-radius: 8px; overflow: hidden; }
+  .profit table { margin: 0; }
+  .profit td { padding: 6px 10px; }
+  .profit tr:last-child td { border-bottom: 0; }
+  .profit .total td { font-weight: 700; border-top: 2px solid var(--line); }
+  .profit .price td { background: #eef5ff; font-weight: 700; }
+  .profit .profit-row td { background: #ecfdf3; color: #067647; font-weight: 700; }
+  .badge { display:inline-block; font-size:10px; font-weight:700; padding:1px 7px; border-radius:999px; background:#eef5ff; color:var(--accent); margin-left:6px; text-transform:uppercase; letter-spacing:.03em; }
+  .unpriced { color: var(--warn); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -103,6 +114,35 @@
       <div class="check"><input id="floorTile" type="checkbox" checked /><label style="margin:0">Tiling the floor</label></div>
       <div class="check"><input id="includeCeiling" type="checkbox" /><label style="margin:0">Re-rock the ceiling too</label></div>
 
+      <div class="pricing-box">
+        <div class="check"><input id="price" type="checkbox" /><label style="margin:0">Add live pricing + profit</label></div>
+        <div class="row2">
+          <div>
+            <label>Quality tier</label>
+            <select id="tier">
+              <option value="good">Good (builder)</option>
+              <option value="better" selected>Better (mid)</option>
+              <option value="best">Best (premium)</option>
+            </select>
+          </div>
+          <div>
+            <label>Markup <span class="hint">(%)</span></label>
+            <input id="markupPct" type="number" value="20" min="0" />
+          </div>
+        </div>
+        <div class="row2">
+          <div>
+            <label>Labor <span class="hint">(% of materials)</span></label>
+            <input id="laborPct" type="number" value="100" min="0" />
+          </div>
+          <div>
+            <label>Labor $ <span class="hint">(overrides %)</span></label>
+            <input id="laborCost" type="number" placeholder="auto from %" min="0" />
+          </div>
+        </div>
+        <p class="muted" style="font-size:11px;margin:8px 0 0">Needs <code>HOMEDEPOT_API_KEY</code> on the server (or <code>PRICING_MOCK=1</code> for demo prices).</p>
+      </div>
+
       <button type="submit">Generate takeoff →</button>
       <div class="endpoint" id="curl"></div>
     </form>
@@ -132,8 +172,17 @@ function buildBody() {
   };
   const cab = num($('cabinetLF').value); if (cab) b.cabinetLF = cab;
   const ct = num($('countertopSqft').value); if (ct) b.countertopSqft = ct;
+  if ($('price').checked) {
+    b.price = true;
+    b.tier = $('tier').value;
+    b.markupPct = num($('markupPct').value);
+    const lc = num($('laborCost').value);
+    if (lc != null) b.laborCost = lc; else b.laborPct = num($('laborPct').value);
+  }
   return b;
 }
+
+const money = n => '$' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function esc(s) { return String(s).replace(/[&<>]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;' }[c])); }
 
@@ -158,13 +207,53 @@ function render(t) {
   $('out').innerHTML = `
     <div class="summary">${esc(t.summary)}</div>
     <table>
-      <thead><tr><th>Material</th><th>Raw → waste / coverage</th><th class="num">Order</th></tr></thead>
-      <tbody>${rows}</tbody>
+      <thead><tr><th>Material</th><th>Raw → waste / coverage</th><th class="num">Order</th>${t.pricing && t.pricing.ok ? '<th class="num">Cost</th>' : ''}</tr></thead>
+      <tbody>${rowsWithCost(t)}</tbody>
     </table>
+    ${renderPricing(t.pricing)}
     <h3>Plumbing / rough-in checklist</h3><ul class="chk">${plumb}</ul>
     <h3>Electrical / rough-in checklist</h3><ul class="chk">${elec}</ul>
     <div class="disclaimer">⚠ ${esc(t.disclaimer)}</div>
     <details><summary>Raw JSON response</summary><pre>${esc(JSON.stringify(t, null, 2))}</pre></details>`;
+}
+
+// Rebuild the material rows, adding a Cost column when a pricing block is present.
+function rowsWithCost(t) {
+  const priced = t.pricing && t.pricing.ok;
+  const costFor = key => {
+    if (!priced) return null;
+    const l = t.pricing.lines.find(x => x.key === key);
+    if (l) return `<td class="num money">${money(l.line_cost)}</td>`;
+    const u = t.pricing.unpriced_lines.find(x => x.key === key);
+    return `<td class="num unpriced">— <span title="${esc(u ? u.reason : '')}">n/a</span></td>`;
+  };
+  return t.materials.map(m => `
+    <tr>
+      <td>${esc(m.label)}${m.field_verify ? ' <span class="fv">FIELD-VERIFY</span>' : ''}<div class="muted" style="font-size:11px">${esc(m.basis || '')}</div></td>
+      <td>${mathCell(m)}</td>
+      <td class="num order">${m.order_qty} <span class="muted">${esc(m.order_unit)}</span></td>
+      ${priced ? (costFor(m.key) || '<td></td>') : ''}
+    </tr>`).join('');
+}
+
+// Render the profit layout (or a clear "pricing unavailable" note).
+function renderPricing(p) {
+  if (!p) return '';
+  if (!p.ok) return `<div class="disclaimer">💲 Pricing unavailable: ${esc(p.message || p.reason)}</div>`;
+  const g = p.profit_layout;
+  const unpriced = p.unpriced_lines.length
+    ? `<p class="unpriced">⚠ ${p.unpriced_lines.length} line(s) could not be priced: ${p.unpriced_lines.map(u => esc(u.label)).join(', ')}.</p>` : '';
+  return `
+    <h3>Profit layout <span class="badge">${esc(p.tier_label)}</span> <span class="muted" style="text-transform:none;font-weight:400">source: ${esc(p.source)}</span></h3>
+    ${unpriced}
+    <div class="profit"><table>
+      <tr><td>Materials</td><td class="num money">${money(g.materials_cost)}</td></tr>
+      <tr><td>Labor ${p.labor.basis === 'pct_of_materials' ? `<span class="muted">(${p.labor.pct_of_materials}% of materials)</span>` : '<span class="muted">(entered)</span>'}</td><td class="num money">${money(g.labor_cost)}</td></tr>
+      <tr class="total"><td>Total cost</td><td class="num money">${money(g.total_cost)}</td></tr>
+      <tr><td>Markup</td><td class="num">${g.markup_pct}%</td></tr>
+      <tr class="price"><td>Client price</td><td class="num money">${money(g.price)}</td></tr>
+      <tr class="profit-row"><td>Profit <span style="font-weight:400">(${g.margin_pct}% margin)</span></td><td class="num money">${money(g.profit)}</td></tr>
+    </table></div>`;
 }
 
 $('form').addEventListener('submit', async (e) => {

@@ -101,6 +101,34 @@ function request(port, method, path, body) {
     });
     check('POST invalid JSON -> 400', badJson.status === 400);
 
+    // ── pricing (opt-in) ──────────────────────────────────────────────────
+    // Force the deterministic mock provider for the wire tests (no key / network).
+    process.env.PRICING_MOCK = '1';
+    delete process.env.HOMEDEPOT_API_KEY;
+
+    const priced = await request(port, 'POST', '/material-takeoff',
+      { projectType: 'kitchen_remodel', kitchenSqft: 200, price: true, tier: 'better', markupPct: 20, laborPct: 100 });
+    check('POST price=true -> 200 with pricing block', priced.status === 200 && priced.json.pricing && priced.json.pricing.ok === true);
+    check('  -> mock source, better tier, fully priced', priced.json.pricing.source === 'mock' && priced.json.pricing.tier === 'better' && priced.json.pricing.fully_priced === true);
+    check('  -> profit layout has both markup% and margin%', priced.json.pricing.profit_layout.markup_pct === 20 && priced.json.pricing.profit_layout.margin_pct > 0);
+    check('  -> price = total_cost x 1.20', Math.abs(priced.json.pricing.profit_layout.price - Math.round(priced.json.pricing.profit_layout.total_cost * 1.2 * 100) / 100) < 0.01);
+    check('  -> quantities still present alongside pricing', priced.json.derived.total_cabinet_lf === 40);
+
+    const pricedGet = await request(port, 'GET', '/material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&price=true&tier=best');
+    check('GET price=true&tier=best -> best tier', pricedGet.status === 200 && pricedGet.json.pricing.tier === 'best');
+
+    const pricedText = await request(port, 'GET', '/material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&price=true&format=text');
+    check('price + format=text -> PROFIT LAYOUT block', /PROFIT LAYOUT/.test(pricedText.text));
+
+    // No pricing requested -> no pricing block (backwards compatible).
+    const noPrice = await request(port, 'POST', '/material-takeoff', { projectType: 'kitchen_remodel', kitchenSqft: 200 });
+    check('no price flag -> no pricing block (unchanged shape)', noPrice.json.pricing === undefined);
+
+    // Pricing requested but provider unavailable -> quantities still 200, pricing ok:false.
+    delete process.env.PRICING_MOCK;
+    const noProv = await request(port, 'POST', '/material-takeoff', { projectType: 'kitchen_remodel', kitchenSqft: 200, price: true });
+    check('price=true, no provider -> 200, pricing ok:false pricing_unavailable', noProv.status === 200 && noProv.json.ok === true && noProv.json.pricing.ok === false && noProv.json.pricing.reason === 'pricing_unavailable');
+
     // 404
     const notFound = await request(port, 'GET', '/nope');
     check('GET /nope -> 404', notFound.status === 404 && notFound.json.error === 'not_found');

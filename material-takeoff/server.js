@@ -45,6 +45,8 @@ const { URL } = require('url');
 const {
   buildTakeoff, getProjectTypes, renderTakeoffText, loadDataset,
 } = require('./takeoff_engine.js');
+const { priceTakeoff, renderPricingText } = require('./pricing_engine.js');
+const { selectPricingProvider } = require('./pricing_provider.js');
 
 // Load the dataset once at boot and reuse it for every request (it never changes at
 // runtime). Saves a file read per call.
@@ -100,6 +102,11 @@ function isTextFormat(v) {
   return String(v || '').toLowerCase() === 'text';
 }
 
+function isTruthy(v) {
+  const s = String(v == null ? '' : v).toLowerCase();
+  return s === 'true' || s === '1' || s === 'yes' || s === 'on';
+}
+
 // Numeric/boolean query params arrive as strings; the engine's resolveInputs() coerces
 // them, so we pass the raw param bag straight through.
 
@@ -117,7 +124,9 @@ function handleIndex(res) {
       'POST /material-takeoff': 'body: { projectType, kitchenSqft, ...optional } -> full takeoff',
       'GET /material-takeoff?projectType=kitchen_remodel&kitchenSqft=200': 'same, query-driven',
       hint: 'add &format=text (GET) or "format":"text" (POST) for a rendered block',
+      pricing: 'add price=true to attach live Home Depot pricing + a profit layout. Options: tier=good|better|best, markupPct, laborPct (percent of materials) or laborCost (dollars). Requires HOMEDEPOT_API_KEY on the server; without it pricing returns { ok:false, reason:"pricing_unavailable" } while quantities still return.',
     },
+    pricing_enabled: !!selectPricingProvider(process.env).provider,
   });
 }
 
@@ -127,7 +136,8 @@ function handleProjectTypes(res) {
 }
 
 // Core dispatch shared by GET (query params) and POST (body).
-function handleTakeoff(res, params) {
+// Async because pricing (when requested) fetches live prices over the network.
+async function handleTakeoff(res, params) {
   const takeoff = buildTakeoff(params, DATASET);
 
   // Validation failures (ok:false) are client errors -> 400 with the clear message.
@@ -136,7 +146,26 @@ function handleTakeoff(res, params) {
     return sendJson(res, 400, takeoff);
   }
 
-  if (isTextFormat(params.format)) return sendText(res, 200, renderTakeoffText(takeoff));
+  // Pricing is OPT-IN (price=true). Quantities are always returned; pricing is layered
+  // on top and never turns a valid takeoff into an error — a pricing outage degrades
+  // to takeoff.pricing = { ok:false, reason } while the quantities still stand.
+  if (isTruthy(params.price)) {
+    const { provider } = selectPricingProvider(process.env);
+    takeoff.pricing = await priceTakeoff(takeoff, {
+      provider,
+      dataset: DATASET,
+      tier: params.tier,
+      markupPct: params.markupPct,
+      laborPct: params.laborPct,
+      laborCost: params.laborCost,
+    });
+  }
+
+  if (isTextFormat(params.format)) {
+    let text = renderTakeoffText(takeoff);
+    if (takeoff.pricing) text += '\n' + renderPricingText(takeoff.pricing);
+    return sendText(res, 200, text);
+  }
   return sendJson(res, 200, takeoff);
 }
 
@@ -162,13 +191,13 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { status: 'ok', uptime_s: Math.round(process.uptime()) });
     }
     if (req.method === 'GET' && path === '/material-takeoff/project-types') return handleProjectTypes(res);
-    if (req.method === 'GET' && path === '/material-takeoff') return handleTakeoff(res, query);
+    if (req.method === 'GET' && path === '/material-takeoff') return await handleTakeoff(res, query);
 
     if (req.method === 'POST' && path === '/material-takeoff') {
       let body;
       try { body = await readJsonBody(req); }
       catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
-      return handleTakeoff(res, { ...body });
+      return await handleTakeoff(res, { ...body });
     }
 
     return sendJson(res, 404, { ok: false, error: 'not_found',

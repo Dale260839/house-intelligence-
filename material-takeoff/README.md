@@ -25,11 +25,14 @@ BuildSuite calls this over HTTP (JSON in/out, CORS enabled). **v1 covers one pro
 
 | File | What it is |
 |---|---|
-| `material_dataset.json` | The knowledge base: rates, waste factors, coverage rates, the input form contract, and the fixtures checklist — with `_meta` sources + disclaimer. |
+| `material_dataset.json` | The knowledge base: rates, waste factors, coverage rates, the input form contract, the fixtures checklist, and the **pricing tiers** (good/better/best search terms per line) — with `_meta` sources + disclaimer. |
 | `takeoff_engine.js` | The brain: takes a project type + measurements, returns the order-ready quantities (raw + waste % + final order) and the rough-in checklist. Deterministic, dependency-free, unit-tested. Has a CLI. |
-| `server.js` | Thin HTTP layer over the engine — **same pattern/stack as House Intelligence's `server.js`** (Node core `http`, manual CORS, JSON errors). |
+| `pricing_provider.js` | The **live Home Depot pricing** seam: a third-party price provider (via `HOMEDEPOT_API_KEY`) over the zero-dep `https` shim, a deterministic mock for dev/tests, and an env auto-selector (mirrors House Intelligence's provider pattern). |
+| `pricing_engine.js` | The **pricing + profit layer**: picks a quality tier, costs each material line, adds a labor line, and lays out profit both ways (markup % + implied margin %). Async, additive — the quantity engine is untouched. |
+| `server.js` | Thin HTTP layer over the engine — **same pattern/stack as House Intelligence's `server.js`** (Node core `http`, manual CORS, JSON errors). Adds opt-in `price=true`. |
 | `test_engine.js` | Engine tests (leads with the canonical 200 sqft example). |
-| `test_server.js` | HTTP API tests over the wire. |
+| `test_pricing.js` | Pricing + profit tests (mock provider + fake-transport live-provider parsing). |
+| `test_server.js` | HTTP API tests over the wire (incl. the pricing route). |
 | `test-page.html` | Standalone browser test page (a form that calls `POST /material-takeoff`). |
 | `Procfile`, `Dockerfile`, `.gitignore`, `package.json` | Deploy/run config, mirroring House Intelligence. |
 
@@ -53,6 +56,10 @@ npm test            # node test_engine.js && node test_server.js
 
 # the API (defaults to port 3100 so it can run next to House Intelligence's 3000)
 npm start           # node server.js
+
+# with pricing (no key needed — deterministic demo prices):
+PRICING_MOCK=1 node takeoff_engine.js 200      # (quantities; use the API for pricing)
+PRICING_MOCK=1 npm start                        # then POST with "price":true
 ```
 
 Then open **`test-page.html`** in a browser (it defaults to `http://localhost:3100`) to demo
@@ -148,6 +155,37 @@ curl -X POST http://localhost:3100/material-takeoff \
 
 A `GET /material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&...` form is also available
 (handy from a browser). Add `&format=text` (GET) or `"format":"text"` (POST) for a rendered text block.
+
+### Pricing + profit layout (opt-in)
+
+Add `price=true` for **live Home Depot pricing** and a **profit layout**. Prices come from a
+third-party service (Home Depot has no official API) via `HOMEDEPOT_API_KEY`; without a key,
+pricing returns `{ ok:false, reason:"pricing_unavailable" }` and quantities still return.
+
+```bash
+curl -X POST http://localhost:3100/material-takeoff \
+  -H "Content-Type: application/json" \
+  -d '{"projectType":"kitchen_remodel","kitchenSqft":200,"price":true,"tier":"better","markupPct":20,"laborPct":100}'
+```
+
+Pricing options: **`tier`** (`good`/`better`/`best` quality grades), **`markupPct`**, **`laborPct`**
+(% of materials) or **`laborCost`** ($). The response adds a `pricing` block: a live unit price +
+cost per material line, plus a profit layout showing materials → labor → total cost → markup %
+→ client price → profit + **implied margin %**.
+
+```jsonc
+"pricing": {
+  "ok": true, "source": "homedepot_live", "tier": "better",
+  "lines": [ { "key": "thinset", "unit_price": 18.0, "line_cost": 72.0, "order_qty": 4, "order_unit": "50 lb bag", ... } ],
+  "profit_layout": {
+    "materials_cost": 10382, "labor_cost": 10382, "total_cost": 20764,
+    "markup_pct": 20, "price": 24916.80, "profit": 4152.80, "margin_pct": 16.7
+  }
+}
+```
+
+See **`API_GUIDE.md` §4b** for the full pricing contract. Set the key (and optional
+`HOMEDEPOT_API_URL`) in `.env` — see the repo-root `.env.example`.
 
 ### Validation / errors
 

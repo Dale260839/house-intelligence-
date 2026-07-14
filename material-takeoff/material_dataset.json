@@ -19,7 +19,14 @@
       "Grout: ~100 sqft per 25 lb bag (12in tile, 1/8in joints); smaller tile / mosaic uses more."
     ],
     "supported_project_types": ["kitchen_remodel"],
-    "last_reviewed": "2026-06-17"
+    "last_reviewed": "2026-06-17",
+    "pricing_disclaimer": "Prices are LIVE from a third-party Home Depot pricing API at request time and are matched to a search term per quality tier, NOT to your exact chosen SKU. Treat them as a budgetary estimate, not a quote. Labor is a rough rule-of-thumb figure you should override per job. The markup/profit layout is arithmetic on those inputs, not tax/overhead/financial advice.",
+    "pricing_sources": [
+      "Home Depot has NO official public pricing API; live prices come from a third-party service (e.g. SerpApi Home Depot, BigBox) via HOMEDEPOT_API_KEY. No key -> pricing is unavailable (there is no baked price catalog).",
+      "Quality tiers: good = builder grade, better = mid-grade, best = premium. Each tier maps to a Home Depot search term per material line.",
+      "Labor default = 100% of material cost (a common remodel 1:1 rule of thumb) and is the roughest number here; always override with laborPct or laborCost.",
+      "Profit layout shows BOTH the applied markup % (price = cost x (1 + markup)) and the gross margin % it implies (margin = profit / price)."
+    ]
   },
 
   "project_types": {
@@ -220,6 +227,74 @@
           { "item": "Under-cabinet lighting", "qty_per_upper_lf": 1, "unit": "LF", "note": "Size the run to the upper-cabinet linear feet; one switched/dimmed circuit." },
           { "item": "Romex / NM cable", "qty_per_circuit_ft": 30, "unit": "ft", "note": "Rough estimate at ~30 ft average run per circuit; size 12/2 (20A) and 14/2 (15A) per the actual circuit count and runs." }
         ]
+      },
+
+      "pricing": {
+        "tiers": ["good", "better", "best"],
+        "tier_labels": {
+          "good": "Good — builder grade",
+          "better": "Better — mid-grade",
+          "best": "Best — premium"
+        },
+        "defaults": {
+          "tier": "better",
+          "markup_pct": 20,
+          "labor_pct_of_materials": 100
+        },
+        "labor": {
+          "basis": "pct_of_materials",
+          "default_pct": 100,
+          "note": "ROUGHEST number in this takeoff. Labor defaults to 1:1 with material cost (a common remodel rule of thumb), NOT an estimate of your crew. Override per job with laborPct (percent of materials) or laborCost (absolute dollars)."
+        },
+        "lines": {
+          "base_cabinets": {
+            "price_unit": "LF", "field_estimate": true,
+            "search": { "good": "unfinished base kitchen cabinet", "better": "shaker base kitchen cabinet", "best": "solid wood soft close base cabinet" },
+            "note": "Priced per linear foot from a representative stock cabinet. Made-to-measure — treat as a rough budget only; field-verify actual cabinet order."
+          },
+          "upper_cabinets": {
+            "price_unit": "LF", "field_estimate": true,
+            "search": { "good": "unfinished wall kitchen cabinet", "better": "shaker wall kitchen cabinet", "best": "solid wood soft close wall cabinet" },
+            "note": "Priced per linear foot from a representative stock wall cabinet. Made-to-measure — rough budget only."
+          },
+          "countertop": {
+            "price_unit": "sqft", "field_estimate": true,
+            "search": { "good": "laminate countertop", "better": "quartz countertop", "best": "granite slab countertop" },
+            "note": "Priced per finished square foot. Made-to-measure (fabrication + edges vary) — rough budget only."
+          },
+          "backsplash_tile": {
+            "price_unit": "sqft",
+            "search": { "good": "ceramic subway wall tile", "better": "porcelain backsplash tile", "best": "natural stone mosaic backsplash tile" }
+          },
+          "floor_tile": {
+            "price_unit": "sqft",
+            "search": { "good": "ceramic floor tile", "better": "porcelain floor tile", "best": "porcelain wood look plank tile" }
+          },
+          "thinset": {
+            "price_unit": "50 lb bag",
+            "search": { "good": "thinset mortar 50 lb", "better": "modified thinset mortar 50 lb", "best": "premium large format thinset mortar 50 lb" }
+          },
+          "grout": {
+            "price_unit": "25 lb bag",
+            "search": { "good": "sanded grout 25 lb", "better": "stain resistant sanded grout 25 lb", "best": "epoxy grout" }
+          },
+          "drywall_sheets": {
+            "price_unit": "sheet",
+            "search": { "good": "1/2 in drywall 4x8", "better": "1/2 in mold resistant drywall 4x8", "best": "1/2 in mold and moisture resistant drywall 4x8" }
+          },
+          "joint_compound": {
+            "price_unit": "4.5-gal bucket",
+            "search": { "good": "all purpose joint compound bucket", "better": "lightweight all purpose joint compound bucket", "best": "plus 3 lightweight joint compound bucket" }
+          },
+          "drywall_tape": {
+            "price_unit": "250 ft roll",
+            "search": { "good": "paper drywall joint tape 250 ft", "better": "self adhesive mesh drywall tape", "best": "paper drywall joint tape 500 ft" }
+          },
+          "drywall_screws": {
+            "price_unit": "1 lb box",
+            "search": { "good": "1-1/4 in coarse drywall screws 1 lb", "better": "1-1/4 in coarse drywall screws 5 lb", "best": "1-1/4 in fine drywall screws collated" }
+          }
+        }
       }
     }
   }

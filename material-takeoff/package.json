@@ -5,10 +5,11 @@
   "main": "takeoff_engine.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node test_engine.js && node test_server.js",
+    "test": "node test_engine.js && node test_pricing.js && node test_server.js",
     "demo": "node takeoff_engine.js 200",
     "demo:json": "node takeoff_engine.js 200 --json",
-    "types": "node takeoff_engine.js --types"
+    "types": "node takeoff_engine.js --types",
+    "smoke:pricing": "node smoke_pricing.js"
   },
   "engines": { "node": ">=14" },
   "license": "UNLICENSED",
