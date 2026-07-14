@@ -22,6 +22,23 @@
 const round2 = n => Math.round(n * 100) / 100;   // money
 const round1 = n => Math.round(n * 10) / 10;     // percentages
 
+// Run fn over items with at most `limit` in flight at once, preserving input order.
+// Lets the per-line price lookups overlap (a full takeoff prices in ~one slow call
+// instead of the sum of 11) without hammering a rate-limited API with all 11 at once.
+async function mapLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const idx = next++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  };
+  const n = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: n }, worker));
+  return results;
+}
+
 /** Coerce + clamp the pricing request options against the dataset defaults. */
 function resolvePricingOpts(rawOpts, pricingCfg) {
   const d = (pricingCfg && pricingCfg.defaults) || {};
@@ -78,10 +95,11 @@ async function priceTakeoff(takeoff, opts = {}) {
     resolvePricingOpts(opts, pricingCfg);
   const lineCfg = pricingCfg.lines || {};
 
-  // 1-3: price each material line at the chosen tier.
-  const lines = [];
-  const unpriced = [];
-  for (const m of takeoff.materials) {
+  // 1-3: price each material line at the chosen tier. Lookups are independent HTTP
+  // calls, so run them CONCURRENTLY (capped) rather than one-at-a-time — with a live
+  // scrape API at seconds per call, sequential pricing of 11 lines is 10-25s; capped
+  // concurrency brings a full takeoff down to ~one slow call. Order is preserved.
+  const priceOne = async (m) => {
     const cfg = lineCfg[m.key];
     const query = cfg && cfg.search && cfg.search[tier];
     const base = {
@@ -90,31 +108,27 @@ async function priceTakeoff(takeoff, opts = {}) {
       price_unit: (cfg && cfg.price_unit) || m.order_unit,
       field_estimate: !!(cfg && cfg.field_estimate) || !!m.field_verify,
     };
-
-    if (!cfg || !query) {
-      unpriced.push({ ...base, priced: false, reason: 'no_pricing_config' });
-      continue;
-    }
+    if (!cfg || !query) return { ...base, priced: false, reason: 'no_pricing_config' };
 
     const res = await provider.lookup({ key: m.key, query, tier, priceUnit: base.price_unit });
-    if (!res || !res.ok) {
-      unpriced.push({ ...base, priced: false, reason: (res && res.reason) || 'lookup_failed', query });
-      continue;
-    }
+    if (!res || !res.ok) return { ...base, priced: false, reason: (res && res.reason) || 'lookup_failed', query };
 
-    const unitPrice = res.unit_price;
-    const lineCost = round2(unitPrice * m.order_qty);
-    lines.push({
+    return {
       ...base,
       priced: true,
-      unit_price: round2(unitPrice),
-      line_cost: lineCost,
+      unit_price: round2(res.unit_price),
+      line_cost: round2(res.unit_price * m.order_qty),
       currency: res.currency || 'USD',
       product_title: res.product_title || null,
       product_url: res.product_url || null,
       query,
-    });
-  }
+    };
+  };
+
+  const PRICE_CONCURRENCY = 5;  // overlap lookups but stay under free-tier rate limits
+  const priced = await mapLimit(takeoff.materials, PRICE_CONCURRENCY, priceOne);
+  const lines = priced.filter(p => p.priced);       // filter preserves order
+  const unpriced = priced.filter(p => !p.priced);
 
   // 4: labor line.
   const materialsCost = round2(lines.reduce((s, l) => s + l.line_cost, 0));

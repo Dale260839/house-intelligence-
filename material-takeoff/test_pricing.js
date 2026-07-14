@@ -97,6 +97,31 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   check('all-miss -> materials_cost 0 and all lines listed unpriced', allUnpriced.profit_layout.materials_cost === 0 && allUnpriced.unpriced_lines.length === takeoff().materials.length);
 
   console.log('\n========================================');
+  console.log('CONCURRENCY — lookups overlap, capped, order preserved');
+  console.log('========================================');
+  {
+    let inFlight = 0, maxInFlight = 0;
+    const delay = ms => new Promise(r => setTimeout(r, ms));
+    const slow = {
+      id: 'slow', source: 'slow',
+      async lookup({ key, tier: tr }) {
+        inFlight++; maxInFlight = Math.max(maxInFlight, inFlight);
+        await delay(15);
+        inFlight--;
+        const price = (MOCK_UNIT_PRICES[key] && MOCK_UNIT_PRICES[key][tr]) || 10;
+        return { ok: true, unit_price: price, currency: 'USD', product_title: key, source: 'slow' };
+      },
+    };
+    const tk = takeoff();
+    const pr = await priceTakeoff(tk, { provider: slow, dataset: ds, tier: 'better' });
+    check('all lines priced via slow provider', pr.fully_priced === true);
+    check('lookups ran CONCURRENTLY (maxInFlight > 1, not sequential)', maxInFlight > 1);
+    check('concurrency CAPPED at <= 5', maxInFlight <= 5);
+    check('priced lines preserve material order',
+      JSON.stringify(pr.lines.map(l => l.key)) === JSON.stringify(tk.materials.map(m => m.key)));
+  }
+
+  console.log('\n========================================');
   console.log('LIVE PROVIDER — URL building + response parsing (fake transport)');
   console.log('========================================');
 
