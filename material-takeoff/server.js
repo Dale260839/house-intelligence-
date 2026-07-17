@@ -47,10 +47,18 @@ const {
 } = require('./takeoff_engine.js');
 const { priceTakeoff, renderPricingText } = require('./pricing_engine.js');
 const { selectPricingProvider } = require('./pricing_provider.js');
+const { clientKey, selectRateLimiter } = require('./rate_limiter.js');
 
 // Load the dataset once at boot and reuse it for every request (it never changes at
 // runtime). Saves a file read per call.
 const DATASET = loadDataset();
+
+// Per-client rate limiter, auto-selected from env (RATE_LIMIT_MAX / _WINDOW_MS /
+// _DISABLED). Exported for tests. A periodic sweep drops expired buckets; unref() so it
+// never keeps the process (or the test runner) alive.
+const { limiter: RATE_LIMITER, enabled: RATE_ENABLED, label: RATE_LABEL } = selectRateLimiter();
+const RATE_SWEEP = setInterval(() => RATE_LIMITER.sweep(), 60000);
+if (RATE_SWEEP.unref) RATE_SWEEP.unref();
 
 const PORT = Number(process.env.PORT) || 3100;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -127,6 +135,7 @@ function handleIndex(res) {
       pricing: 'add price=true to attach live Home Depot pricing + a profit layout. Options: tier=good|better|best, markupPct, laborPct (percent of materials) or laborCost (dollars). Requires HOMEDEPOT_API_KEY on the server; without it pricing returns { ok:false, reason:"pricing_unavailable" } while quantities still return.',
     },
     pricing_enabled: !!selectPricingProvider(process.env).provider,
+    rate_limit: RATE_ENABLED ? RATE_LABEL : 'disabled',
   });
 }
 
@@ -186,6 +195,23 @@ const server = http.createServer(async (req, res) => {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const query = Object.fromEntries(url.searchParams.entries());
 
+    // ── rate limit (per client IP) ──────────────────────────────────────────────
+    // /health is exempt so liveness probes never count against the limit. On a hit we
+    // reply 429 with Retry-After; otherwise we attach the standard X-RateLimit-* headers
+    // (merged into the eventual response via setHeader) so clients can self-throttle.
+    if (RATE_ENABLED && path !== '/health') {
+      const rl = RATE_LIMITER.check(clientKey(req));
+      res.setHeader('X-RateLimit-Limit', rl.limit);
+      res.setHeader('X-RateLimit-Remaining', rl.remaining);
+      res.setHeader('X-RateLimit-Reset', Math.ceil(rl.resetAt / 1000)); // epoch seconds
+      if (!rl.allowed) {
+        const retryS = Math.ceil(rl.retryAfterMs / 1000);
+        res.setHeader('Retry-After', retryS);
+        return sendJson(res, 429, { ok: false, error: 'rate_limited',
+          message: `Too many requests. Try again in ${retryS}s.`, retry_after_s: retryS });
+      }
+    }
+
     if (req.method === 'GET' && path === '/') return handleIndex(res);
     if (req.method === 'GET' && path === '/health') {
       return sendJson(res, 200, { status: 'ok', uptime_s: Math.round(process.uptime()) });
@@ -214,8 +240,9 @@ const server = http.createServer(async (req, res) => {
 if (require.main === module) {
   server.listen(PORT, HOST, () => {
     console.log(`Material Takeoff API listening on http://${HOST}:${PORT}`);
+    console.log('Rate limit:       ' + (RATE_ENABLED ? RATE_LABEL : 'disabled'));
     console.log('Try:  curl -X POST http://localhost:' + PORT + '/material-takeoff -H "Content-Type: application/json" -d \'{"projectType":"kitchen_remodel","kitchenSqft":200}\'');
   });
 }
 
-module.exports = { server };
+module.exports = { server, RATE_LIMITER };

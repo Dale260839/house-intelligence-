@@ -5,7 +5,7 @@
  * test_server.js.
  */
 const http = require('http');
-const { server } = require('./server.js');
+const { server, RATE_LIMITER } = require('./server.js');
 
 let pass = 0, fail = 0;
 function check(name, cond) { console.log((cond ? 'PASS' : 'FAIL') + ' ' + name); cond ? pass++ : fail++; }
@@ -128,6 +128,23 @@ function request(port, method, path, body) {
     delete process.env.PRICING_MOCK;
     const noProv = await request(port, 'POST', '/material-takeoff', { projectType: 'kitchen_remodel', kitchenSqft: 200, price: true });
     check('price=true, no provider -> 200, pricing ok:false pricing_unavailable', noProv.status === 200 && noProv.json.ok === true && noProv.json.pricing.ok === false && noProv.json.pricing.reason === 'pricing_unavailable');
+
+    // ── rate limiting ─────────────────────────────────────────────────────
+    // Drive the exported limiter directly: tighten to 3/window, reset the buckets,
+    // then fire 4 requests from the same client — the 4th must be 429.
+    RATE_LIMITER.configure({ max: 3 });
+    RATE_LIMITER.reset();
+    const rlCodes = [];
+    for (let i = 0; i < 4; i++) rlCodes.push((await request(port, 'GET', '/')).status);
+    check('first 3 requests under limit -> 200', rlCodes.slice(0, 3).every(s => s === 200));
+    const blocked = await request(port, 'GET', '/');   // 5th, still over the limit
+    check('over-limit request -> 429 rate_limited', blocked.status === 429 && blocked.json.error === 'rate_limited');
+    check('  -> Retry-After + X-RateLimit headers present', !!blocked.headers['retry-after'] && blocked.headers['x-ratelimit-limit'] === '3');
+    // /health is exempt from rate limiting even when over the limit.
+    const healthOver = await request(port, 'GET', '/health');
+    check('/health exempt from rate limit (still 200)', healthOver.status === 200);
+    RATE_LIMITER.configure({ max: 120 });               // restore + clear for any later calls
+    RATE_LIMITER.reset();
 
     // 404
     const notFound = await request(port, 'GET', '/nope');
