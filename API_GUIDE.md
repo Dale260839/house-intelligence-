@@ -180,20 +180,25 @@ also emit this as CSV (`node lookup_engine.js --rows SEA`).
 
 ## 7. Limitations (read this before demoing the address path)
 
-1. **Address → year runs on a MOCK provider in production right now.** Only these **seeded demo
-   addresses** resolve to a year; any other address gracefully returns `ok:false`
-   (`build_year_source.source:"mock"`, `reason:"not_found"`):
+1. **Address → year is LIVE via RentCast in production** (confirmed 2026-07-09). Pass a **real, full
+   street address** — `<house# street>, city, ST zip` — and it resolves against RentCast, e.g.
+   `9415 Lexington Ave SW, Tacoma, WA 98499` → year **1949** (`confidence:"exact"`) with a `property`
+   block. Non-resolutions still return `build_year_source.source:"rentcast"` (the integration is
+   fine — the input was): an **incomplete** address (city/zip only) → `reason:"http_400"`; a parcel
+   RentCast has **no record** for → `reason:"not_found"`.
 
-   | Address | Resolves to |
+   **Local/offline (no `RENTCAST_API_KEY`)** the server falls back to the bundled MockProvider, which
+   knows only these **fabricated fixture addresses** — test data, NOT real RentCast records:
+
+   | Mock fixture address | Mock resolves to |
    |---|---|
-   | `1730 Minor Ave, Seattle, WA 98101` | **1945** (1940s Seattle) |
-   | `233 S Wacker Dr, Chicago, IL 60606` | **1968** (aluminum-wiring era) |
-   | `1 Infinite Loop, Cupertino, CA 95014` | **2022** (new build) |
-   | `500 UnknownYear Rd, Austin, TX 78701` | *found, but no year on record* → `ok:false` |
+   | `1730 Minor Ave, Seattle, WA 98101` | **1945** |
+   | `233 S Wacker Dr, Chicago, IL 60606` | **1968** |
+   | `1 Infinite Loop, Cupertino, CA 95014` | **2022** |
+   | `500 UnknownYear Rd, Austin, TX 78701` | *found, no year* → `ok:false` |
 
-   **To resolve arbitrary real addresses, a real vendor must be wired into `address_provider.js`**
-   (RentCast is the recommendation; blocked on licensing). The seam already exists — swap the
-   provider and every endpoint upgrades for free. **The year path works fully today** regardless.
+   The provider seam is identical either way; `RENTCAST_API_KEY` selects live-vs-mock. **The year
+   path works regardless of the provider.**
 
 2. **Probabilistic, not factual.** Output is *"likely / inspect for"*, never *"guaranteed present"*.
    A home may have been re-piped, re-wired, or renovated. The `disclaimer` field says so — surface it.

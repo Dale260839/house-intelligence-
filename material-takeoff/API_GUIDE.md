@@ -11,6 +11,22 @@ is auditable. JSON in / JSON out, **CORS enabled** (callable from the browser). 
 
 ---
 
+## ⚠️ Current status — read first
+
+- ✅ **Quantities are LIVE and stable.** `POST /material-takeoff` reliably returns the full material
+  list + rough-in checklist. **Build the core UI against this now** — it won't change.
+- 🟡 **Pricing (`price=true`) — the response contract is FINAL, but the live pricing provider is
+  temporarily unavailable.** The third-party Home Depot pricing service (BigBox) is in an extended
+  outage on their end; a switch to an alternate provider (SerpApi) is in progress. Until it's
+  restored, a `price=true` call still returns **HTTP 200 with the full quantities**, but the
+  `pricing` block comes back `{ "ok": false, "reason": ... }` (or with lines in `unpriced_lines`).
+- 👉 **What this means for you:** build the pricing UI **defensively** — always render the quantities,
+  and render the pricing/profit block **only when `data.pricing?.ok === true`**; otherwise show a
+  graceful "pricing unavailable" state. **No frontend change will be needed when pricing turns back
+  on** — the shape in §4b is already the final one. See the pricing-aware example in §6.
+
+---
+
 ## 1. Quick start
 
 ```bash
@@ -153,9 +169,13 @@ for each material line at a chosen **quality tier**, and a **profit layout** (ma
 cost → markup → client price → profit + margin).
 
 > **Home Depot has no official pricing API.** Live prices come from a third-party service
-> (SerpApi Home Depot, BigBox, …) via a `HOMEDEPOT_API_KEY` set on the server. **Without a key,
-> pricing is unavailable** — the takeoff still returns quantities, and `pricing` comes back
-> `{ "ok": false, "reason": "pricing_unavailable" }`. There is no baked price catalog.
+> (SerpApi Home Depot, BigBox, …) via a `HOMEDEPOT_API_KEY` set on the server. **Without a working
+> key/provider, pricing is unavailable** — the takeoff still returns quantities, and `pricing` comes
+> back `{ "ok": false, "reason": "pricing_unavailable" }`. There is no baked price catalog.
+>
+> **As of now the provider is being switched (BigBox outage → SerpApi), so `price=true` will return
+> an unavailable/partial `pricing` block. Treat pricing as optional and degrade gracefully — the
+> shape below is final and won't change when the provider is restored.**
 
 **Pricing inputs** (all optional, sent alongside the normal takeoff inputs):
 
@@ -227,6 +247,12 @@ Bad/missing input returns **HTTP 400** with a clear JSON message (never a 200 wi
 | Unsupported `projectType` (e.g. `"bathroom"`) | `400` | `unsupported_project_type` |
 | Malformed JSON body | `400` | `invalid_json` |
 | Unknown route | `404` | `not_found` |
+| Too many requests (per-client rate limit) | `429` | `rate_limited` |
+
+**Rate limiting:** requests are limited **per client IP** (default **120 / 60s**; `/health` is
+exempt). Over the limit returns **HTTP 429** `{ "ok": false, "error": "rate_limited", "retry_after_s": N }`
+with a `Retry-After` header. Every response also carries `X-RateLimit-Limit` / `-Remaining` / `-Reset`
+so a client can self-throttle. **Back off and retry after `Retry-After` seconds on a 429.**
 
 ```jsonc
 // POST {"projectType":"kitchen_remodel"}  →  HTTP 400
@@ -260,6 +286,38 @@ async function getTakeoff(input) {
 const t = await getTakeoff({ kitchenSqft: 200, tileLayout: "diagonal", floorTile: false });
 t.materials.forEach(m => console.log(m.label, "→", m.order_qty, m.order_unit));
 ```
+
+**Rendering with pricing (defensive — handles the provider being unavailable):**
+
+```js
+// Request pricing by adding price=true (+ tier/markupPct/laborPct). Everything else is the same.
+const t = await getTakeoff({
+  kitchenSqft: 200,
+  price: true, tier: "better", markupPct: 20, laborPct: 100,
+});
+
+// ALWAYS render quantities — they're always present.
+renderMaterials(t.materials);
+renderChecklist(t.fixtures_checklist);
+
+// Render pricing ONLY when it succeeded. Right now (provider outage) this will be false —
+// your UI should show a "pricing unavailable" state, NOT an error. No code change needed
+// when pricing turns back on.
+if (t.pricing?.ok) {
+  renderProfitLayout(t.pricing.profit_layout);      // materials/labor/cost/markup/price/profit/margin
+  renderPricedLines(t.pricing.lines);               // per-line unit_price + line_cost
+  if (!t.pricing.fully_priced) {
+    // Some lines couldn't be matched — show them as "price n/a", still total the rest.
+    flagUnpriced(t.pricing.unpriced_lines);
+  }
+} else {
+  showPricingUnavailable(t.pricing?.reason);        // e.g. "pricing_unavailable"
+}
+```
+
+> Key rule: **quantities and pricing are independent.** A `price=true` call never fails because of
+> pricing — you still get `t.ok === true` with full quantities; only `t.pricing.ok` reflects whether
+> prices came through.
 
 **Build the input form dynamically:**
 
@@ -307,8 +365,10 @@ curl -i -X POST https://house-intelligence-production-f7f6.up.railway.app/materi
     hardware, appliances, permits, or labor.
 11. **Drywall assumes a full re-rock** of walls (perimeter × height − openings). Patch-only jobs
     will be over-estimated — use `wallPerimeterLF`/`includeCeiling` to tune.
-12. **No auth, persistence, or rate limiting.** Stateless and public; anyone with the URL can call
-    it. Fine for internal/pilot use — add a key + quota before billing it as a paid add-on.
+12. **No auth or persistence yet** (rate limiting IS in place — per-client IP, HTTP 429 over the
+    limit; see §5). Still stateless and public — add API-key auth + persistence before billing it as a
+    paid add-on. Note the limiter is in-memory per process, so a multi-instance deploy multiplies the
+    effective limit (move the counter to Redis/Supabase when you scale out).
 
 The output always carries a `disclaimer` field restating that it's an order-ready *starting point*,
 not a substitute for field measurement.
@@ -343,6 +403,6 @@ not a substitute for field measurement.
 
 ---
 
-_Engine + API are unit-tested (57 engine + 48 pricing + 33 HTTP tests). Standards are sourced in
-`material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
+_Engine + API are unit-tested (57 engine + 60 pricing + 24 rate-limit + 37 HTTP tests). Standards are
+sourced in `material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
 
