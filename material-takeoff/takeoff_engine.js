@@ -1,24 +1,17 @@
 /**
- * Material Takeoff — Lookup Engine
- * --------------------------------
- * Sibling to House Intelligence's lookup_engine.js, same shape (a JSON dataset of
- * rules + a deterministic, dependency-free, unit-tested lookup engine) pointed at a
- * different question:
+ * Material Takeoff — Lookup Engine (dispatcher)
+ * ---------------------------------------------
+ * Sibling to House Intelligence's lookup_engine.js: a JSON dataset of rules + a
+ * deterministic, dependency-free, unit-tested engine, pointed at "what to BUY".
  *
- *   House Intelligence:  property -> what to INSPECT (era-based hazards)
- *   Material Takeoff:    project scope + size -> what to BUY (a quantified order list)
+ *   project scope + size  ->  an ORDER-READY material list (quantities already include
+ *   standard waste factors, and each line reports its raw measurement + waste %/coverage
+ *   so the math is auditable) + a plumbing/electrical rough-in checklist.
  *
- * Input:  a project type (v1: "kitchen_remodel") + the kitchen's square footage, plus
- *         optional known measurements (ceiling height, cabinet LF, countertop sqft,
- *         tile layout, floor-tile yes/no, openings, ...).
- * Output: an ORDER-READY material list whose quantities already include standard waste
- *         factors, WHILE ALSO reporting each line's raw measurement + waste % (or
- *         coverage rate) so the math is transparent and auditable, plus a plumbing /
- *         electrical rough-in checklist.
- *
- * Design intent (matches the spec): tell a contractor exactly what to order — no waste,
- * no shortage — as a STARTING POINT, never a substitute for field measurement. Cabinets
- * and countertops are made-to-measure and always flagged "field-verify".
+ * Each project type plugs in as its own BUILDER module (builders/<type>.js). This engine
+ * validates input against the dataset's per-type `inputs` spec, then dispatches to the
+ * matching builder and wraps its output in a standard response envelope. Adding a project
+ * type = a dataset block + a builder module; no change to this dispatcher.
  *
  * IMPORTANT: output is an estimate to order against, not a guarantee of jobsite reality.
  */
@@ -26,15 +19,18 @@
 const fs = require('fs');
 const path = require('path');
 
+// ─── builder registry ─────────────────────────────────────────────────────────
+// Maps projectType -> a module exporting build(v, def, ds) -> { derived, materials,
+// fixtures_checklist, summary }. To add a type: add a dataset block + a builder here.
+const BUILDERS = {
+  kitchen_remodel: require('./builders/kitchen_remodel.js'),
+  bathroom_remodel: require('./builders/bathroom_remodel.js'),
+};
+
 function loadDataset(datasetPath) {
   const p = datasetPath || path.join(__dirname, 'material_dataset.json');
   return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
-
-// ─── number helpers ──────────────────────────────────────────────────────────
-const round1 = n => Math.round(n * 10) / 10;       // 1 decimal for raw/measured values
-const ceil   = n => Math.ceil(n - 1e-9);           // whole units (bags, sheets, sqft to buy)
-const isPosNum = v => Number.isFinite(Number(v)) && Number(v) > 0;
 
 // ─── input validation + defaulting ───────────────────────────────────────────
 // Drives both buildTakeoff() and the GET /project-types form contract from the same
@@ -72,52 +68,6 @@ function resolveInputs(rawInput, projectDef) {
   return { values: out, errors };
 }
 
-// ─── line-item builders ──────────────────────────────────────────────────────
-// Each builder returns a fully self-describing line: the raw measurement, the
-// transparency of the math (waste % or coverage), and the final order quantity.
-
-// Made-to-measure (cabinets): raw == order, no blind waste, must be field-verified.
-function madeToMeasureLine(key, label, rawLF, basis, note) {
-  return {
-    key, label, type: 'made_to_measure',
-    raw: round1(rawLF), raw_unit: 'LF',
-    waste_pct: 0,
-    order_qty: round1(rawLF), order_unit: 'LF',
-    field_verify: true,
-    basis, note,
-  };
-}
-
-// Waste-factor item (countertop, tile, drywall area): order = raw * (1 + waste).
-function wasteFactorLine(key, label, raw, unit, wastePct, basis, opts = {}) {
-  const ordered = raw * (1 + wastePct);
-  return {
-    key, label, type: 'waste_factor',
-    raw: round1(raw), raw_unit: unit,
-    waste_pct: Math.round(wastePct * 100),
-    order_qty: opts.wholeUnits ? ceil(ordered) : round1(ordered),
-    order_unit: unit,
-    field_verify: !!opts.fieldVerify,
-    basis,
-    note: opts.note,
-  };
-}
-
-// Coverage / consumable item (thinset, grout, compound, tape, screws): the buffer is
-// baked into a deliberately conservative coverage rate, not a waste %. Order = whole
-// units to cover the raw driver.
-function coverageLine(key, label, rawDriver, driverUnit, coverage, coverageUnit, orderUnit, basis, note) {
-  const units = ceil(rawDriver / coverage);
-  return {
-    key, label, type: 'coverage',
-    raw: round1(rawDriver), raw_unit: driverUnit,
-    coverage, coverage_unit: coverageUnit,
-    order_qty: units, order_unit: orderUnit,
-    waste_pct: null,
-    basis, note,
-  };
-}
-
 /**
  * Build the full material takeoff for a project type + measurements.
  * Returns { ok:true, ... } on success, or { ok:false, error, message } on bad input
@@ -132,7 +82,8 @@ function buildTakeoff(input, dataset) {
       message: `Provide "projectType". Supported: ${ds._meta.supported_project_types.join(', ')}.` };
   }
   const def = ds.project_types[pt];
-  if (!def) {
+  const builder = BUILDERS[pt];
+  if (!def || !builder) {
     return { ok: false, error: 'unsupported_project_type',
       message: `Unsupported projectType "${pt}". Supported: ${ds._meta.supported_project_types.join(', ')}.` };
   }
@@ -142,175 +93,22 @@ function buildTakeoff(input, dataset) {
     return { ok: false, error: 'invalid_input', message: errors.join('; '), fields: errors };
   }
 
-  const g = def.geometry;
-  const r = def.rates;
-
-  // ── derive cabinet linear feet (calibrated to floor area, not perimeter) ──
-  const totalLF = isPosNum(v.cabinetLF) ? v.cabinetLF : v.kitchenSqft * g.cabinet_lf_per_sqft;
-  const baseLF  = isPosNum(v.baseCabinetLF)  ? v.baseCabinetLF  : totalLF * g.base_share;
-  const upperLF = isPosNum(v.upperCabinetLF) ? v.upperCabinetLF : totalLF * g.upper_share;
-
-  // ── geometry: wall perimeter + areas ──
-  const perimeter = isPosNum(v.wallPerimeterLF) ? v.wallPerimeterLF : 4 * Math.sqrt(v.kitchenSqft);
-  const grossWall = perimeter * v.ceilingHeight;
-  const ceilingArea = v.includeCeiling ? v.kitchenSqft : 0;
-  const wallArea = Math.max(0, grossWall - v.openings * g.opening_deduct_sqft) + ceilingArea;
-
-  // ── tile areas ──
-  const backsplashRaw = (v.backsplashHeight > 0) ? baseLF * (v.backsplashHeight / 12) : 0;
-  const floorRaw = v.floorTile ? v.kitchenSqft : 0;
-  const tiledSubstrate = backsplashRaw + floorRaw;            // area thinset/grout cover
-  const tileWaste = r.tile.waste_by_layout[v.tileLayout];
-
-  const materials = [];
-
-  // Cabinets — made-to-measure, no waste factor, field-verify.
-  materials.push(madeToMeasureLine('base_cabinets', 'Base cabinets', baseLF,
-    isPosNum(v.cabinetLF) || isPosNum(v.baseCabinetLF) ? 'provided' : `${g.cabinet_lf_per_sqft} LF/sqft total x ${g.base_share * 100}% base`,
-    r.cabinets.note));
-  materials.push(madeToMeasureLine('upper_cabinets', 'Upper cabinets', upperLF,
-    isPosNum(v.cabinetLF) || isPosNum(v.upperCabinetLF) ? 'provided' : `${g.cabinet_lf_per_sqft} LF/sqft total x ${g.upper_share * 100}% upper`,
-    r.cabinets.note));
-
-  // Countertop — finished sqft from base run; slab order adds cutting waste. Field-verify.
-  const counterFinished = isPosNum(v.countertopSqft) ? v.countertopSqft : baseLF * r.countertop.sqft_per_base_lf;
-  const counterWaste = v.countertopType === 'veined' ? r.countertop.waste_pct_veined : r.countertop.waste_pct_solid;
-  materials.push(wasteFactorLine('countertop', `Countertop slab (${v.countertopType})`, counterFinished, 'sqft', counterWaste,
-    isPosNum(v.countertopSqft) ? 'provided finished sqft' : `${r.countertop.sqft_per_base_lf} sqft per base LF (${round1(baseLF)} LF)`,
-    { wholeUnits: true, fieldVerify: true, note: r.countertop.note }));
-
-  // Backsplash tile.
-  if (backsplashRaw > 0) {
-    materials.push(wasteFactorLine('backsplash_tile', 'Backsplash tile', backsplashRaw, 'sqft', tileWaste,
-      `${round1(baseLF)} base LF x ${v.backsplashHeight}in high (${v.tileLayout} layout)`,
-      { wholeUnits: true, note: r.tile.waste_note }));
-  }
-
-  // Floor tile.
-  if (floorRaw > 0) {
-    materials.push(wasteFactorLine('floor_tile', 'Floor tile', floorRaw, 'sqft', tileWaste,
-      `floor area (${v.tileLayout} layout)`,
-      { wholeUnits: true, note: r.tile.waste_note }));
-  }
-
-  // Thinset + grout — sized to the actual tiled substrate (raw, pre-tile-waste).
-  if (tiledSubstrate > 0) {
-    materials.push(coverageLine('thinset', 'Thinset mortar', tiledSubstrate, 'sqft',
-      r.thinset.coverage_sqft_per_bag, 'sqft/bag', `${r.thinset.bag_lb} lb bag`,
-      `backsplash ${round1(backsplashRaw)} + floor ${round1(floorRaw)} sqft set`, r.thinset.note));
-
-    const groutCov = v.tileLayout === 'mosaic'
-      ? r.grout.coverage_sqft_per_bag_small_tile
-      : r.grout.coverage_sqft_per_bag;
-    materials.push(coverageLine('grout', 'Grout', tiledSubstrate, 'sqft',
-      groutCov, 'sqft/bag', `${r.grout.bag_lb} lb bag`,
-      `tiled area (${v.tileLayout})`, r.grout.note));
-  }
-
-  // Drywall sheets — wall area with kitchen waste, then 4x8 sheets.
-  if (wallArea > 0) {
-    const dwOrderedArea = wallArea * (1 + r.drywall.waste_pct);
-    materials.push({
-      key: 'drywall_sheets', label: 'Drywall (4x8 sheets)', type: 'waste_factor',
-      raw: round1(wallArea), raw_unit: 'sqft',
-      waste_pct: Math.round(r.drywall.waste_pct * 100),
-      order_qty: ceil(dwOrderedArea / r.drywall.sheet_sqft), order_unit: 'sheet',
-      basis: `perimeter ${round1(perimeter)} LF x ${v.ceilingHeight} ft - ${v.openings} openings${v.includeCeiling ? ' + ceiling' : ''}, /${r.drywall.sheet_sqft} sqft/sheet`,
-      note: r.drywall.note,
-    });
-
-    // Joint compound, tape, screws scale with the drywall surface.
-    const jcLb = wallArea / 100 * r.joint_compound.lb_per_100sqft;
-    materials.push(coverageLine('joint_compound', 'Joint compound', jcLb, 'lb',
-      r.joint_compound.bucket_lb, 'lb/bucket', '4.5-gal bucket',
-      `${r.joint_compound.lb_per_100sqft} lb per 100 sqft of wall`, r.joint_compound.note));
-
-    const tapeLF = wallArea / r.drywall_tape.sqft_per_lf;
-    materials.push(coverageLine('drywall_tape', 'Drywall joint tape', tapeLF, 'LF',
-      r.drywall_tape.roll_lf, 'LF/roll', `${r.drywall_tape.roll_lf} ft roll`,
-      `wall area / ${r.drywall_tape.sqft_per_lf} sqft per LF of tape`, r.drywall_tape.note));
-
-    const sheets = ceil(dwOrderedArea / r.drywall.sheet_sqft);
-    const screwCount = sheets * r.drywall_screws.per_sheet;
-    materials.push(coverageLine('drywall_screws', 'Drywall screws', screwCount, 'screws',
-      r.drywall_screws.per_box, 'screws/box', '1 lb box',
-      `${sheets} sheets x ${r.drywall_screws.per_sheet} screws/sheet`, r.drywall_screws.note));
-  }
-
-  // ── fixtures / rough-in checklist ──
-  const fixtures = buildFixtures(def.fixtures, { baseLF, upperLF });
-
-  const orderCount = materials.length;
-  const fieldVerifyKeys = materials.filter(m => m.field_verify).map(m => m.key);
+  // Dispatch the quantity derivation to the project's builder.
+  const result = builder.build(v, def, ds);
+  const fieldVerifyKeys = result.materials.filter(m => m.field_verify).map(m => m.key);
 
   return {
     ok: true,
     project_type: pt,
     project_label: def.label,
-    inputs: {
-      kitchenSqft: v.kitchenSqft,
-      ceilingHeight: v.ceilingHeight,
-      tileLayout: v.tileLayout,
-      floorTile: v.floorTile,
-      countertopType: v.countertopType,
-      backsplashHeight: v.backsplashHeight,
-      openings: v.openings,
-      includeCeiling: v.includeCeiling,
-      cabinetLF: v.cabinetLF, baseCabinetLF: v.baseCabinetLF, upperCabinetLF: v.upperCabinetLF,
-      countertopSqft: v.countertopSqft, wallPerimeterLF: v.wallPerimeterLF,
-    },
-    derived: {
-      total_cabinet_lf: round1(totalLF),
-      base_cabinet_lf: round1(baseLF),
-      upper_cabinet_lf: round1(upperLF),
-      wall_perimeter_lf: round1(perimeter),
-      wall_area_sqft: round1(wallArea),
-      backsplash_sqft: round1(backsplashRaw),
-      floor_tile_sqft: round1(floorRaw),
-      tiled_substrate_sqft: round1(tiledSubstrate),
-      countertop_finished_sqft: round1(counterFinished),
-    },
-    materials,
-    fixtures_checklist: fixtures,
-    summary: takeoffSummary(def, v, orderCount, fixtures),
+    inputs: v,                          // resolved inputs (defaults applied)
+    derived: result.derived,
+    materials: result.materials,
+    fixtures_checklist: result.fixtures_checklist,
+    summary: result.summary,
     field_verify_items: fieldVerifyKeys,
     disclaimer: ds._meta.disclaimer,
   };
-}
-
-// Resolve the fixtures template into concrete quantities (some scale with cabinet LF).
-function buildFixtures(template, ctx) {
-  const resolve = (entry) => {
-    const out = { item: entry.item, unit: entry.unit, note: entry.note };
-    if (entry.qty != null) {
-      out.qty = entry.qty;
-    } else if (entry.qty_per_base_lf != null) {
-      out.qty = Math.max(entry.qty_min || 0, ceil(ctx.baseLF * entry.qty_per_base_lf));
-    } else if (entry.qty_per_upper_lf != null) {
-      out.qty = ceil(ctx.upperLF * entry.qty_per_upper_lf);
-    } else if (entry.qty_per_circuit_ft != null) {
-      // Estimate total NM run from the number of circuits in this checklist.
-      out.qty = ctx._circuitCount != null ? ctx._circuitCount * entry.qty_per_circuit_ft : entry.qty_per_circuit_ft;
-      out.estimate = true;
-    }
-    return out;
-  };
-
-  // Count circuits first so the Romex line can estimate total footage.
-  const circuitCount = (template.electrical || [])
-    .filter(e => e.unit === 'circuit')
-    .reduce((sum, e) => sum + (e.qty != null ? e.qty : 0), 0);
-  ctx._circuitCount = circuitCount;
-
-  return {
-    plumbing: (template.plumbing || []).map(resolve),
-    electrical: (template.electrical || []).map(resolve),
-  };
-}
-
-function takeoffSummary(def, v, orderCount, fixtures) {
-  const fx = (fixtures.plumbing.length + fixtures.electrical.length);
-  return `${def.label} — ${v.kitchenSqft} sqft: ${orderCount} material line${orderCount === 1 ? '' : 's'} quantified (order-ready, waste included) plus a ${fx}-item plumbing/electrical rough-in checklist. Cabinets & countertops are made-to-measure — field-verify before ordering.`;
 }
 
 /** The supported project types + their input form contract (for GET /project-types). */
@@ -342,7 +140,7 @@ const COL = { made_to_measure: '~', waste_factor: '+', coverage: '=' };
 function renderTakeoffText(t) {
   if (!t.ok) return t.message;
   const lines = [];
-  lines.push(`MATERIAL TAKEOFF — ${t.project_label.toUpperCase()}  (${t.inputs.kitchenSqft} sqft)`);
+  lines.push(`MATERIAL TAKEOFF - ${t.project_label.toUpperCase()}`);
   lines.push(t.summary);
   lines.push('');
   lines.push('ORDER LIST (raw  ->  +waste% / coverage  ->  ORDER):');

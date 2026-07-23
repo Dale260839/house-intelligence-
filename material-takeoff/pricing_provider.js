@@ -79,6 +79,13 @@ function parsePrice(v) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// Make a matched product URL publicly usable. SerpApi returns Home Depot links on the
+// `apionline.homedepot.com` API host; the customer-facing product page is on `www`.
+function normalizeProductUrl(url) {
+  if (!url || typeof url !== 'string') return null;
+  return url.replace(/:\/\/apionline\.homedepot\.com/i, '://www.homedepot.com');
+}
+
 // Pull the first usable product { title, url, price } out of whatever the service
 // returned. Covers SerpApi (home_depot: `products`/`product_results`), BigBox
 // (`search_results[i].product`), and a flat `{ price, title, link }`.
@@ -100,7 +107,7 @@ function extractProduct(json) {
       return {
         price,
         title: c.title || c.name || c.product_title || null,
-        url: c.link || c.url || c.product_url || c.offer_url || null,
+        url: normalizeProductUrl(c.link || c.url || c.product_url || c.offer_url || null),
       };
     }
   }
@@ -197,6 +204,12 @@ const MOCK_UNIT_PRICES = {
   joint_compound: { good: 15,  better: 18,  best: 24  },  // per bucket
   drywall_tape:   { good: 6,   better: 8,   best: 12  },  // per roll
   drywall_screws: { good: 7,   better: 9,   best: 13  },  // per box
+  // bathroom_remodel additions
+  wall_tile:              { good: 3,   better: 7,   best: 16  },  // per sqft
+  waterproofing_membrane: { good: 45,  better: 110, best: 180 },  // per roll/kit
+  cement_backer_board:    { good: 12,  better: 15,  best: 20  },  // per sheet
+  vanity:                 { good: 180, better: 320, best: 600 },  // per LF (rough budget)
+  vanity_top:             { good: 25,  better: 55,  best: 95  },  // per sqft
 };
 
 function createMockPricingProvider(opts = {}) {

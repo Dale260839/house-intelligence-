@@ -7,7 +7,8 @@ already include standard waste factors, with the raw measurement and waste % sho
 is auditable. JSON in / JSON out, **CORS enabled** (callable from the browser). No API key.
 
 > Sibling of the House Intelligence API (`/scope`, `/rows`), deployed as a separate service from
-> the same repo. **v1 supports one project type: `kitchen_remodel`.**
+> the same repo. **Supported project types: `kitchen_remodel` and `bathroom_remodel`.** Each has its
+> own inputs — always discover them via `GET /material-takeoff/project-types` (§3).
 
 ---
 
@@ -15,11 +16,11 @@ is auditable. JSON in / JSON out, **CORS enabled** (callable from the browser). 
 
 - ✅ **Quantities are LIVE and stable.** `POST /material-takeoff` reliably returns the full material
   list + rough-in checklist. **Build the core UI against this now** — it won't change.
-- 🟡 **Pricing (`price=true`) — the response contract is FINAL, but the live pricing provider is
-  temporarily unavailable.** The third-party Home Depot pricing service (BigBox) is in an extended
-  outage on their end; a switch to an alternate provider (SerpApi) is in progress. Until it's
-  restored, a `price=true` call still returns **HTTP 200 with the full quantities**, but the
-  `pricing` block comes back `{ "ok": false, "reason": ... }` (or with lines in `unpriced_lines`).
+- 🟡 **Pricing (`price=true`) — response contract is FINAL; provider being activated.** BigBox (the
+  original Home Depot price source) had a multi-day platform outage, so we switched to **SerpApi**,
+  which is **verified working end-to-end** (real prices flowing). It goes live the moment the SerpApi
+  key is set on the server. Until then, a `price=true` call still returns **HTTP 200 with the full
+  quantities**, but the `pricing` block comes back `{ "ok": false, "reason": "pricing_unavailable" }`.
 - 👉 **What this means for you:** build the pricing UI **defensively** — always render the quantities,
   and render the pricing/profit block **only when `data.pricing?.ok === true`**; otherwise show a
   graceful "pricing unavailable" state. **No frontend change will be needed when pricing turns back
@@ -27,19 +28,36 @@ is auditable. JSON in / JSON out, **CORS enabled** (callable from the browser). 
 
 ---
 
-## 1. Quick start
+## 1. How to use it
+
+**The typical flow — 3 steps:**
+
+1. **Discover the form** → `GET /material-takeoff/project-types`
+   Returns every input field (name, type, default, unit, allowed values) so you can render the form
+   dynamically without hardcoding it.
+2. **Request a takeoff** → `POST /material-takeoff` with `{ projectType, kitchenSqft, ...optional }`
+   Returns the material list + rough-in checklist. Quantities always come back; add `price=true` to
+   also get live pricing + a profit layout.
+3. **Render the result**
+   Always show `materials` + `fixtures_checklist`. If you requested pricing, show the `pricing` block
+   **only when `pricing.ok === true`** (quantities and pricing are independent — see §6).
+
+**Call it two ways — same parameters (§3) either way:**
 
 ```bash
+# POST + JSON (use this from an app)
 curl -X POST https://house-intelligence-production-f7f6.up.railway.app/material-takeoff \
   -H "Content-Type: application/json" \
   -d '{"projectType":"kitchen_remodel","kitchenSqft":200}'
 ```
 
-Or open the query form straight in a browser (human-readable text):
-
 ```
+# GET + query string (handy for a link / browser). Add &format=text for a human-readable block.
 https://house-intelligence-production-f7f6.up.railway.app/material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&format=text
 ```
+
+CORS is enabled, so the browser can call it directly. No API key required to call the API (pricing
+needs a provider key configured **on the server**, not sent by the client).
 
 ---
 
@@ -61,21 +79,33 @@ Add `price=true` to any takeoff call to attach **live Home Depot pricing + a pro
 
 ---
 
-## 3. Inputs
+## 3. Parameters
+
+Every parameter works the same as a **JSON body field** (POST) or a **query-string param** (GET) —
+they coerce identically (query strings like `floorTile=false` become the right type). Parameters
+fall into three groups: **A** describes the job, **B** controls output format, **C** turns on pricing.
+
+### A. Takeoff inputs (describe the job)
+
+Inputs are **per project type** — `projectType` (always required) selects the type, and each type
+declares its own fields. The authoritative list is `GET /material-takeoff/project-types`; the two
+built-in types are documented below.
+
+#### `kitchen_remodel`
 
 **Required**
 
-| Field | Type | Unit | Notes |
+| Param | Type | Unit | Notes |
 |---|---|---|---|
-| `projectType` | string | — | Must be `"kitchen_remodel"` (v1). |
+| `projectType` | string | — | `"kitchen_remodel"`. |
 | `kitchenSqft` | number | sqft | Kitchen **floor** area. Drives every derived quantity. Must be ≥ 1. |
 
 **Optional** (sensible defaults; override when you know the real number)
 
-| Field | Type | Default | Notes |
+| Param | Type | Default | Notes |
 |---|---|---|---|
 | `ceilingHeight` | number (ft) | `8` | Wall height for drywall. |
-| `tileLayout` | enum | `straight` | `straight` (7%), `diagonal` (15%), `herringbone` (20%), `mosaic` (20%) — sets tile waste. |
+| `tileLayout` | enum | `straight` | `straight` (7%), `diagonal` (15%), `herringbone` (20%), `mosaic` (20%) — sets tile waste %. |
 | `floorTile` | boolean | `true` | Whether the floor is tiled. Set `false` for LVP / wood / existing floor. |
 | `countertopType` | enum | `solid` | `solid` (+15% slab waste) or `veined` (+25%, pattern-matched). |
 | `backsplashHeight` | number (in) | `18` | Backsplash height; `0` = no backsplash. |
@@ -85,25 +115,94 @@ Add `price=true` to any takeoff call to attach **live Home Depot pricing + a pro
 | `baseCabinetLF` | number (LF) | derived | Known base LF (also drives countertop + backsplash). |
 | `upperCabinetLF` | number (LF) | derived | Known upper LF (drives under-cabinet lighting length). |
 | `countertopSqft` | number (sqft) | derived | Known **finished** countertop area. |
-| `wallPerimeterLF` | number (LF) | derived | Known wall perimeter (else estimated as 4·√area). |
+| `wallPerimeterLF` | number (LF) | derived | Known wall perimeter (else estimated from `roomShape`). |
+| `roomShape` | enum | `square` | `square` / `rectangular` / `galley` / `l_shaped` / `u_shaped` / `island` — refines the wall-perimeter estimate (longer/irregular shapes have more wall per sqft); `island` also adds ~15% cabinet/counter run. Ignored when `wallPerimeterLF` is given. |
+| `floorTileLayout` · `backsplashTileLayout` | enum | *falls back to `tileLayout`* | Per-surface tile layout (`straight`/`diagonal`/`herringbone`/`mosaic`) so floor and backsplash can differ. |
+| `floorTileBoxSqft` · `backsplashTileBoxSqft` | number (sqft) | — | Coverage per box of your tile. When given, that tile is ordered in whole **boxes** (`pack_round` line) and **priced per box**. |
+| `countertopSlabSqft` | number (sqft) | — | Usable area per slab. When given, countertop is ordered in whole **slabs**. |
 
-> **Always pass the known-measurement overrides when you have them** (`cabinetLF`,
-> `countertopSqft`, `wallPerimeterLF`). The derived values are scoping estimates from a
-> square-room model; real measurements make the takeoff accurate.
+> **Pass the known-measurement overrides whenever you have them** (`cabinetLF`, `countertopSqft`,
+> `wallPerimeterLF`). Defaults are scoping estimates from a square-room model; real measurements make
+> the takeoff accurate. `GET /material-takeoff/project-types` returns this exact list programmatically
+> (with types/defaults/units) so a UI can build the form without hardcoding it.
 
-`GET /material-takeoff/project-types` returns this same list programmatically, so a UI can build
-the form without hardcoding it.
+#### `bathroom_remodel`
+
+**Required**
+
+| Param | Type | Unit | Notes |
+|---|---|---|---|
+| `projectType` | string | — | `"bathroom_remodel"`. |
+| `bathroomSqft` | number | sqft | Bathroom **floor** area. Drives floor tile + geometry. Must be ≥ 1. |
+
+**Optional** — scope is **configurable, default-full**; toggles drop major line groups.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `ceilingHeight` | number (ft) | `8` | Wall height for drywall + surround. |
+| `showerType` | enum | `tub_shower` | `tub_shower` / `shower` (walk-in) / `tub` / `none`. Sets the surround wall area; **`none` drops surround tile, waterproofing, and backer board.** |
+| `showerWallSqft` | number (sqft) | derived | Known tiled surround area (else derived from `showerType`). |
+| `tileLayout` | enum | `straight` | Waste %: `straight` 7 / `diagonal` 15 / `herringbone` 20 / `mosaic` 20. Applies to floor + wall tile. |
+| `wainscotHeight` | number (in) | `0` | Wall-tile wainscot around the room beyond the wet zone. `0` = none. |
+| `vanityLF` | number (LF) | `3` | Vanity linear feet → vanity + vanity top. `0` (or `includeVanity:false`) drops them. |
+| `vanityTopType` | enum | `solid` | `solid` (+15% slab waste) or `veined` (+25%). |
+| `floorTile` | boolean | `true` | Set `false` for LVP / existing floor (drops floor tile). |
+| `includeVanity` | boolean | `true` | Set `false` to keep the existing vanity. |
+| `includeWaterproofing` | boolean | `true` | Set `false` to skip the membrane (keeps tile + backer). |
+| `openings` | number | `1` | Door/window openings, deducted from wall area (~15 sqft each). |
+| `includeCeiling` | boolean | `false` | Add the ceiling to the drywall quantity. |
+| `wallPerimeterLF` | number (LF) | derived | Known wall perimeter (else estimated from `roomShape`). |
+| `roomShape` | enum | `square` | `square` / `rectangular` / `galley` / `l_shaped` / `u_shaped` — refines the wall-perimeter estimate. Ignored when `wallPerimeterLF` is given. |
+| `floorTileLayout` · `wallTileLayout` | enum | *falls back to `tileLayout`* | Per-surface tile layout so the floor and the shower/wall surround can differ. |
+| `floorTileBoxSqft` · `wallTileBoxSqft` | number (sqft) | — | Box coverage; when given, that tile is ordered in whole **boxes** (`pack_round`) and **priced per box**. |
+| `vanityTopSlabSqft` | number (sqft) | — | Usable area per slab; when given, the vanity top is ordered in whole **slabs**. |
+
+> Bathroom material lines: floor tile, **wall tile** (shower/tub surround + wainscot), thinset, grout,
+> **waterproofing membrane**, **cement backer board** (wet walls), drywall (dry walls) + compound/tape/
+> screws, **vanity** + **vanity top** — plus a bathroom rough-in checklist (toilet, vanity+faucet,
+> shutoffs, P-trap, shower valve, tub/shower base, waste/vent, exhaust fan, GFCI, vanity lighting, Romex).
+
+### B. Output format
+
+| Param | Type | Default | Effect |
+|---|---|---|---|
+| `format` | enum | `json` | Set to `text` for a human-readable rendered block instead of JSON (great for email/proposal/browser). |
+
+### C. Pricing parameters (opt-in — see §4b for the pricing response)
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `price` | boolean | `false` | Turn pricing on. The rest of this group is ignored unless this is set. |
+| `tier` | enum | `better` | `good` (builder grade), `better` (mid), `best` (premium). Picks which product/price per line. |
+| `markupPct` | number (%) | `20` | Markup on total cost: `price = cost × (1 + markupPct/100)`. |
+| `laborPct` | number (%) | `100` | Labor as a **percent of material cost**. Default 1:1 is a rough rule of thumb — override per job. |
+| `laborCost` | number ($) | — | Explicit labor dollars. **Overrides `laborPct`** when given. |
 
 ---
 
-## 4. Response shape
+## 4. Response — quantities
+
+A successful takeoff (`ok: true`, HTTP 200) has these top-level fields:
+
+| Field | Type | What it is |
+|---|---|---|
+| `ok` | boolean | `true` on success. **Always branch on this**, not just the HTTP status. |
+| `project_type` | string | Echo of the project type (`"kitchen_remodel"`). |
+| `inputs` | object | Every input echoed back with defaults applied (so you can confirm what was used). |
+| `derived` | object | The geometry the estimate was built from (cabinet LF, wall area, tiled area, etc.). |
+| `materials` | array | One object per material line — **the order list** (see "Reading a material line"). |
+| `fixtures_checklist` | object | `{ plumbing:[…], electrical:[…] }` — rough-in items (`item`, `qty`, `unit`, `note`). Not priced. |
+| `summary` | string | One-line human summary of the takeoff. |
+| `field_verify_items` | string[] | Keys of the made-to-measure lines to flag "verify before ordering". |
+| `disclaimer` | string | Surface this — it states the output is a starting point, not a field measurement. |
+| `pricing` | object | **Only present when `price=true`** — see §4b. |
 
 ```jsonc
 {
   "ok": true,
   "project_type": "kitchen_remodel",
-  "inputs": { ...echoed inputs with defaults applied... },
-  "derived": {                       // the geometry the estimate was built from
+  "inputs": { "kitchenSqft": 200, "ceilingHeight": 8, "tileLayout": "straight", "floorTile": true, ... },
+  "derived": {
     "total_cabinet_lf": 40, "base_cabinet_lf": 24, "upper_cabinet_lf": 16,
     "wall_perimeter_lf": 56.6, "wall_area_sqft": 422.5,
     "backsplash_sqft": 36, "floor_tile_sqft": 200, "tiled_substrate_sqft": 236,
@@ -122,14 +221,31 @@ the form without hardcoding it.
 
 ### Reading a material line
 
-Every line is self-describing. There are three line `type`s, distinguished by how the order
-quantity is reached:
+Each object in `materials` has these fields:
 
-| `type` | Means | Order math |
+| Field | Type | What it is |
 |---|---|---|
-| `made_to_measure` | Cabinets — cut to fit | `order_qty = raw` (no waste factor); **`field_verify: true`** |
-| `waste_factor` | Countertop, tile, drywall | `order_qty = raw × (1 + waste_pct/100)` |
+| `key` | string | Stable id for the line (`base_cabinets`, `thinset`, …) — use for keying UI rows. |
+| `label` | string | Human label (`"Thinset mortar"`). |
+| `type` | enum | `made_to_measure` / `waste_factor` / `coverage` — how `order_qty` was reached (below). |
+| `raw` | number | The measured driver (e.g. 236 sqft to tile). |
+| `raw_unit` | string | Unit of `raw` (`sqft`, `LF`, …). |
+| `order_qty` | number | **What to actually buy.** |
+| `order_unit` | string | Unit of `order_qty` (`50 lb bag`, `sheet`, `sqft`, `LF`, …). |
+| `waste_pct` | number\|null | Waste % applied (`waste_factor` lines); `0` for made-to-measure; `null` for coverage lines. |
+| `coverage` / `coverage_unit` | number / string | Coverage rate (`coverage` lines only, e.g. 75 `sqft/bag`). |
+| `field_verify` | boolean | `true` = made-to-measure; show a "verify before ordering" flag. |
+| `basis` | string | Plain-English explanation of the math — show it for trust/auditability. |
+| `note` | string | Estimating note for the line. |
+
+The `type` determines how `order_qty` is computed:
+
+| `type` | Applies to | Order math |
+|---|---|---|
+| `made_to_measure` | Cabinets, vanity — cut to fit | `order_qty = raw` (no waste factor); **`field_verify: true`** |
+| `waste_factor` | Countertop, tile, drywall (sqft) | `order_qty = raw × (1 + waste_pct/100)` |
 | `coverage` | Thinset, grout, compound, tape, screws | `order_qty = ceil(raw ÷ coverage)` in whole purchasable units |
+| `pack_round` | Tile w/ box size, countertop/vanity-top w/ slab size | `order_qty = ceil(raw×(1+waste) ÷ pack_size)` in whole **boxes/slabs**; also reports `covered_qty` (sqft incl. waste) + `pack_size`/`pack_unit`. **Priced per box/slab.** |
 
 Example lines:
 
@@ -173,21 +289,30 @@ cost → markup → client price → profit + margin).
 > key/provider, pricing is unavailable** — the takeoff still returns quantities, and `pricing` comes
 > back `{ "ok": false, "reason": "pricing_unavailable" }`. There is no baked price catalog.
 >
-> **As of now the provider is being switched (BigBox outage → SerpApi), so `price=true` will return
-> an unavailable/partial `pricing` block. Treat pricing as optional and degrade gracefully — the
-> shape below is final and won't change when the provider is restored.**
+> **Provider status:** switched to **SerpApi** (verified working end-to-end) after BigBox's outage —
+> it activates when the SerpApi key is set on the server. Until then, `price=true` returns an
+> unavailable `pricing` block. Treat pricing as optional and degrade gracefully — the response shape
+> below is final regardless of which provider is behind it.
 
-**Pricing inputs** (all optional, sent alongside the normal takeoff inputs):
+**Pricing parameters** are in §3.C (`price`, `tier`, `markupPct`, `laborPct` / `laborCost`).
 
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `price` | boolean | `false` | Turn pricing on. Everything below is ignored unless this is set. |
-| `tier` | enum | `better` | `good` (builder grade), `better` (mid), `best` (premium). Picks which product/price per line. |
-| `markupPct` | number (%) | `20` | Markup on total cost: `price = cost × (1 + markupPct/100)`. |
-| `laborPct` | number (%) | `100` | Labor as a **percent of material cost**. Default 1:1 is a rough rule of thumb — override per job. |
-| `laborCost` | number ($) | — | Explicit labor dollars. **Overrides `laborPct`** when given. |
+**Pricing response** — a `pricing` object added to the takeoff (quantities are unchanged). Fields:
 
-**Pricing response** (`takeoff.pricing`):
+| Field | Type | What it is |
+|---|---|---|
+| `ok` | boolean | `true` if pricing succeeded. **Render the pricing block only when this is `true`.** |
+| `reason` | string | Present when `ok:false` (e.g. `pricing_unavailable`). |
+| `source` | string | `homedepot_live` (or `mock` in dev). |
+| `currency` | string | `USD`. |
+| `tier` / `tier_label` | string | The tier used + its label. |
+| `lines` | array | Priced material lines: `key`, `label`, `order_qty`, `order_unit`, `unit_price`, `line_cost`, `product_title`, `product_url`. |
+| `unpriced_lines` | array | Lines the price service couldn't match, each with a `reason`. |
+| `fully_priced` | boolean | `false` if any line landed in `unpriced_lines`. |
+| `labor` | object | `{ basis, pct_of_materials, cost }`. |
+| `profit_layout` | object | `materials_cost`, `labor_cost`, `total_cost`, `markup_pct`, `price`, `profit`, `margin_pct`. |
+| `disclaimer` | string | States prices are a live budgetary estimate, not a quote. |
+
+Example `takeoff.pricing`:
 
 ```jsonc
 {
@@ -219,9 +344,11 @@ cost → markup → client price → profit + margin).
 ```
 
 Notes:
+- **Each priced line links the matched product** — `product_url` (a public `www.homedepot.com`
+  product page) + `product_title`. Deep-link these from the UI so the contractor can view/buy the item.
 - **Both lenses are shown**: `markup_pct` (the input) and `margin_pct` (the implied gross margin).
-- **Made-to-measure lines** (cabinets, countertop) are priced per LF/sqft as a **rough budget** and
-  carry `field_estimate: true` — never a quote.
+- **Made-to-measure lines** (cabinets, countertop, vanity) are priced per LF/sqft as a **rough budget**
+  and carry `field_estimate: true` — never a quote.
 - A price-service outage or unmatched line **never fails the request**: those lines land in
   `unpriced_lines`, `fully_priced` goes `false`, and the rest still totals.
 - Fixtures (plumbing/electrical rough-in) are **not** individually priced — they're the install
@@ -338,11 +465,12 @@ curl -i -X POST https://house-intelligence-production-f7f6.up.railway.app/materi
 
 ## 7. Limitations (what it does NOT do — yet)
 
-1. **One project type.** v1 is `kitchen_remodel` only. Any other `projectType` → 400.
-2. **Estimates, not measurements.** Quantities are derived from floor area via a square-room
-   geometry model (`perimeter ≈ 4·√area`). Galley/L-shaped kitchens, islands, and odd layouts
-   differ — pass the known-measurement overrides (`cabinetLF`, `countertopSqft`, `wallPerimeterLF`)
-   when you have them.
+1. **Two project types** — `kitchen_remodel` and `bathroom_remodel`. Any other `projectType` → 400.
+   (More types are data-driven to add; see the roadmap.)
+2. **Estimates, not measurements.** Quantities are derived from floor area. The wall-perimeter model
+   is now **shape-aware** (`roomShape`: square → u_shaped, plus kitchen `island`), but it's still an
+   estimate — for accuracy pass the known-measurement overrides (`cabinetLF`, `countertopSqft`,
+   `wallPerimeterLF`) whenever you have them; an exact `wallPerimeterLF` always wins over `roomShape`.
 3. **Cabinets & countertops are made-to-measure.** Their LF/sqft are scoping numbers only —
    **field-verify before ordering** (the API flags these with `field_verify: true`).
 4. **Cabinet model is calibrated for typical ~80–300 sqft kitchens** (0.20 LF/sqft). Very large
@@ -351,9 +479,11 @@ curl -i -X POST https://house-intelligence-production-f7f6.up.railway.app/materi
    a profit layout — but it needs a `HOMEDEPOT_API_KEY` (no key → no prices), prices are matched to
    a per-tier **search term, not your exact SKU**, and labor defaults to a rough rule of thumb. It's
    a budgetary estimate, not a quote.
-6. **Tile & countertop are returned in sqft, not vendor boxes/slabs.** Consumables
-   (thinset/grout/compound/tape/screws) ARE in whole purchasable units; tile you still divide by
-   your chosen tile's box coverage.
+6. **Tile & countertop default to sqft — pass the pack size to get boxes/slabs.** Provide
+   `floorTileBoxSqft` / `backsplashTileBoxSqft` / `wallTileBoxSqft` (and `countertopSlabSqft` /
+   `vanityTopSlabSqft`) and those lines round to whole **boxes/slabs** (`pack_round`) and **price per
+   box/slab** (which fixes the per-case pricing over-count). Without a pack size, tile stays in sqft.
+   Consumables (thinset/grout/compound/tape/screws) are always in whole purchasable units.
 7. **Conservative by design ("no shortage" > "no waste").** It rounds up and uses the high end of
    waste bands / low end of coverage — so it may slightly over-order on purpose.
 8. **One `tileLayout` for both floor and backsplash.** Can't yet specify different layouts per
@@ -378,8 +508,9 @@ not a substitute for field measurement.
 ## 8. Next steps (roadmap)
 
 **Product**
-- **More project types** — bathroom remodel, flooring-only, whole-room drywall, etc. The engine is
-  data-driven: add a `project_type` block to `material_dataset.json` (no engine rewrite).
+- **More project types** — **bathroom remodel shipped ✅.** Next: flooring-only, whole-room drywall,
+  whole-home. The engine now dispatches per-type via pluggable builders (`builders/<type>.js`) driven
+  by a `project_type` block in `material_dataset.json` — a new type is a dataset block + a builder.
 - **Pricing layer — shipped (§4b):** live Home Depot pricing (third-party API), good/better/best
   tiers, and a markup+margin profit layout with a labor line. Next: exact-SKU pinning, price
   caching/refresh, and a per-line vendor-pack-size mapping so tile prices are per-box not per-sqft.
@@ -403,6 +534,7 @@ not a substitute for field measurement.
 
 ---
 
-_Engine + API are unit-tested (57 engine + 60 pricing + 24 rate-limit + 37 HTTP tests). Standards are
-sourced in `material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
+_Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 61 pricing +
+24 rate-limit + 37 HTTP tests = 269). Standards are sourced in `material_dataset.json` `_meta`. House
+Intelligence is untouched — separate service, shared repo._
 

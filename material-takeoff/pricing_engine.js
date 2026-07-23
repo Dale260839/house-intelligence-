@@ -105,7 +105,10 @@ async function priceTakeoff(takeoff, opts = {}) {
     const base = {
       key: m.key, label: m.label, tier,
       order_qty: m.order_qty, order_unit: m.order_unit,
-      price_unit: (cfg && cfg.price_unit) || m.order_unit,
+      // pack_round lines (tile boxes / countertop slabs) are priced PER PACK — the HD
+      // price is per box/slab, so unit_price x order_qty (packs) is correct. Non-packed
+      // lines use the configured price_unit (or the order unit).
+      price_unit: (m.type === 'pack_round') ? m.order_unit : ((cfg && cfg.price_unit) || m.order_unit),
       field_estimate: !!(cfg && cfg.field_estimate) || !!m.field_verify,
     };
     if (!cfg || !query) return { ...base, priced: false, reason: 'no_pricing_config' };
@@ -181,6 +184,9 @@ function renderPricingText(p) {
   for (const l of p.lines) {
     const fv = l.field_estimate ? '  [ESTIMATE]' : '';
     L.push(`  ${l.label}: ${l.order_qty} ${l.order_unit} x ${money(l.unit_price)}/${l.price_unit} = ${money(l.line_cost)}${fv}`);
+    if (l.product_title || l.product_url) {
+      L.push(`      ↳ ${[l.product_title, l.product_url].filter(Boolean).join('  —  ')}`);
+    }
   }
   for (const u of p.unpriced_lines) L.push(`  ${u.label}: NOT PRICED (${u.reason})`);
   const g = p.profit_layout;

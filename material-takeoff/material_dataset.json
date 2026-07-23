@@ -18,8 +18,8 @@
       "Thinset: ~75-80 sqft per 50 lb bag (1/4 x 1/4 trowel).",
       "Grout: ~100 sqft per 25 lb bag (12in tile, 1/8in joints); smaller tile / mosaic uses more."
     ],
-    "supported_project_types": ["kitchen_remodel"],
-    "last_reviewed": "2026-06-17",
+    "supported_project_types": ["kitchen_remodel", "bathroom_remodel"],
+    "last_reviewed": "2026-07-16",
     "pricing_disclaimer": "Prices are LIVE from a third-party Home Depot pricing API at request time and are matched to a search term per quality tier, NOT to your exact chosen SKU. Treat them as a budgetary estimate, not a quote. Labor is a rough rule-of-thumb figure you should override per job. The markup/profit layout is arithmetic on those inputs, not tax/overhead/financial advice.",
     "pricing_sources": [
       "Home Depot has NO official public pricing API; live prices come from a third-party service (e.g. SerpApi Home Depot, BigBox) via HOMEDEPOT_API_KEY. No key -> pricing is unavailable (there is no baked price catalog).",
@@ -139,12 +139,51 @@
           "required": false,
           "default": false,
           "description": "Add the ceiling (= floor area) to the drywall quantity. Default false (most remodels keep the ceiling)."
+        },
+        {
+          "name": "roomShape",
+          "type": "enum",
+          "required": false,
+          "default": "square",
+          "allowed": ["square", "rectangular", "galley", "l_shaped", "u_shaped", "island"],
+          "description": "Room shape - refines the wall-perimeter estimate (square 4*sqrt(A) up to u_shaped ~5.2*sqrt(A)); 'island' also adds ~15% cabinet/counter run. Ignored when wallPerimeterLF is provided (an exact measurement always wins)."
+        },
+        {
+          "name": "floorTileLayout",
+          "type": "enum", "required": false, "default": null,
+          "allowed": ["straight", "diagonal", "herringbone", "mosaic"],
+          "description": "Per-surface FLOOR tile layout (sets its waste %). Falls back to tileLayout when omitted."
+        },
+        {
+          "name": "backsplashTileLayout",
+          "type": "enum", "required": false, "default": null,
+          "allowed": ["straight", "diagonal", "herringbone", "mosaic"],
+          "description": "Per-surface BACKSPLASH tile layout (sets its waste %). Falls back to tileLayout when omitted."
+        },
+        {
+          "name": "floorTileBoxSqft",
+          "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
+          "description": "Coverage per box of your chosen FLOOR tile. When given, floor tile is ordered in whole BOXES (pack_round) instead of sqft - and priced per box."
+        },
+        {
+          "name": "backsplashTileBoxSqft",
+          "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
+          "description": "Coverage per box of your chosen BACKSPLASH tile. When given, backsplash tile is ordered in whole BOXES - and priced per box."
+        },
+        {
+          "name": "countertopSlabSqft",
+          "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
+          "description": "Usable area per countertop SLAB. When given, countertop is ordered in whole SLABS (pack_round) instead of sqft."
         }
       ],
 
       "geometry": {
-        "perimeter_model": "4 * sqrt(floorSqft)",
-        "perimeter_note": "Square-room approximation; override with wallPerimeterLF when the real perimeter is known (galley / L-shaped rooms have more wall).",
+        "perimeter_model": "perimeter_factor[roomShape] * sqrt(floorSqft)",
+        "perimeter_note": "Shape-aware estimate; override with wallPerimeterLF when the real perimeter is known.",
+        "perimeter_factor_by_shape": { "square": 4.0, "rectangular": 4.1, "galley": 4.6, "l_shaped": 4.8, "u_shaped": 5.2, "island": 4.1 },
+        "perimeter_factor_note": "Perimeter = factor * sqrt(floor area). Square is the minimum-perimeter rectangle; longer/irregular shapes have more wall per sqft. wallPerimeterLF overrides this entirely. Default 'square' (4.0) preserves the original square-room model.",
+        "island_cabinet_factor": 1.15,
+        "island_cabinet_note": "An island adds a cabinet/counter run: multiply the floor-area cabinet estimate by this when roomShape is 'island' and cabinetLF is not provided.",
         "cabinet_lf_per_sqft": 0.20,
         "cabinet_lf_per_sqft_note": "Calibrated to: 100 sqft -> 20 LF total, 200 sqft -> 40 LF total. Scales with FLOOR AREA (not perimeter) so larger kitchens are not under-counted.",
         "base_share": 0.60,
@@ -294,6 +333,130 @@
             "price_unit": "1 lb box",
             "search": { "good": "1-1/4 in coarse drywall screws 1 lb", "better": "1-1/4 in coarse drywall screws 5 lb", "best": "1-1/4 in fine drywall screws collated" }
           }
+        }
+      }
+    },
+
+    "bathroom_remodel": {
+      "id": "bathroom_remodel",
+      "label": "Full Bathroom Remodel",
+      "summary": "Quantified order list for a bathroom remodel: floor + shower/tub surround tile and setting materials, waterproofing, cement backer board, drywall, vanity + top, and a plumbing / electrical rough-in checklist. Scope is configurable (defaults to a full remodel).",
+
+      "inputs": [
+        { "name": "bathroomSqft", "type": "number", "required": true, "min": 1, "unit": "sqft",
+          "description": "Bathroom FLOOR area in square feet. Drives floor tile + geometry." },
+        { "name": "ceilingHeight", "type": "number", "required": false, "default": 8, "min": 1, "unit": "ft",
+          "description": "Wall height, for drywall + surround wall-area calculation." },
+        { "name": "showerType", "type": "enum", "required": false, "default": "tub_shower",
+          "allowed": ["tub_shower", "shower", "tub", "none"],
+          "description": "Wet zone: 'tub_shower' (tub with tiled surround), 'shower' (walk-in tiled shower), 'tub' (tub, minimal surround), 'none' (no shower/tub tile). Sets the surround wall area and whether waterproofing/backer board are added." },
+        { "name": "showerWallSqft", "type": "number", "required": false, "default": null, "unit": "sqft",
+          "description": "Known tiled surround wall area. If omitted, derived from showerType." },
+        { "name": "tileLayout", "type": "enum", "required": false, "default": "straight",
+          "allowed": ["straight", "diagonal", "herringbone", "mosaic"],
+          "description": "Tile layout for floor + walls. Sets tile waste %: straight 7%, diagonal 15%, herringbone 20%, mosaic 20%." },
+        { "name": "wainscotHeight", "type": "number", "required": false, "default": 0, "min": 0, "unit": "in",
+          "description": "Wall-tile wainscot height around the rest of the room (beyond the wet zone). 0 = none." },
+        { "name": "vanityLF", "type": "number", "required": false, "default": 3, "min": 0, "unit": "LF",
+          "description": "Vanity linear feet. Drives the vanity + vanity top. Default 3 (a typical single vanity)." },
+        { "name": "vanityTopType", "type": "enum", "required": false, "default": "solid",
+          "allowed": ["solid", "veined"],
+          "description": "Vanity top slab waste: 'solid' +15%, 'veined' +25% (pattern-matched)." },
+        { "name": "floorTile", "type": "boolean", "required": false, "default": true,
+          "description": "Whether the floor is tiled. Set false for LVP / existing floor." },
+        { "name": "includeVanity", "type": "boolean", "required": false, "default": true,
+          "description": "Include the vanity + vanity top. Set false to keep the existing vanity." },
+        { "name": "includeWaterproofing", "type": "boolean", "required": false, "default": true,
+          "description": "Include a waterproofing membrane over the wet zone. Set false if not waterproofing to a membrane system." },
+        { "name": "openings", "type": "number", "required": false, "default": 1, "min": 0, "unit": "count",
+          "description": "Number of door/window openings, deducted from wall area (~15 sqft each)." },
+        { "name": "includeCeiling", "type": "boolean", "required": false, "default": false,
+          "description": "Add the ceiling (= floor area) to the drywall quantity." },
+        { "name": "wallPerimeterLF", "type": "number", "required": false, "default": null, "unit": "LF",
+          "description": "Known wall perimeter. If omitted, estimated from roomShape (4 * sqrt(floor area) for square)." },
+        { "name": "roomShape", "type": "enum", "required": false, "default": "square",
+          "allowed": ["square", "rectangular", "galley", "l_shaped", "u_shaped"],
+          "description": "Room shape - refines the wall-perimeter estimate (square 4*sqrt(A) up to u_shaped ~5.2*sqrt(A)). Ignored when wallPerimeterLF is provided." },
+        { "name": "floorTileLayout", "type": "enum", "required": false, "default": null,
+          "allowed": ["straight", "diagonal", "herringbone", "mosaic"],
+          "description": "Per-surface FLOOR tile layout (sets its waste %). Falls back to tileLayout when omitted." },
+        { "name": "wallTileLayout", "type": "enum", "required": false, "default": null,
+          "allowed": ["straight", "diagonal", "herringbone", "mosaic"],
+          "description": "Per-surface WALL/surround tile layout (sets its waste %). Falls back to tileLayout when omitted." },
+        { "name": "floorTileBoxSqft", "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
+          "description": "Coverage per box of your FLOOR tile. When given, floor tile is ordered in whole BOXES (pack_round) - and priced per box." },
+        { "name": "wallTileBoxSqft", "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
+          "description": "Coverage per box of your WALL tile. When given, wall tile is ordered in whole BOXES - and priced per box." },
+        { "name": "vanityTopSlabSqft", "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
+          "description": "Usable area per vanity-top SLAB. When given, the vanity top is ordered in whole SLABS (pack_round) instead of sqft." }
+      ],
+
+      "geometry": {
+        "perimeter_model": "perimeter_factor[roomShape] * sqrt(floorSqft)",
+        "perimeter_factor_by_shape": { "square": 4.0, "rectangular": 4.1, "galley": 4.6, "l_shaped": 4.8, "u_shaped": 5.2 },
+        "perimeter_factor_note": "Perimeter = factor * sqrt(floor area). wallPerimeterLF overrides. Default 'square' (4.0) = the original square-room model.",
+        "opening_deduct_sqft": 15,
+        "shower_wall_sqft_by_type": { "tub_shower": 100, "shower": 120, "tub": 60, "none": 0 },
+        "shower_wall_note": "Default tiled surround area by type; override with showerWallSqft when known. tub_shower ~ three-wall tub surround to ~6 ft; shower ~ full-height walk-in; tub ~ short tub surround.",
+        "shower_floor_sqft": 12,
+        "shower_floor_note": "Tiled shower-pan area (walk-in shower only); tubs come with their own base."
+      },
+
+      "rates": {
+        "tile": {
+          "waste_by_layout": { "straight": 0.07, "diagonal": 0.15, "herringbone": 0.20, "mosaic": 0.20 },
+          "waste_note": "Top of each sourced band for the no-shortage promise. Order from ONE dye lot."
+        },
+        "thinset": { "coverage_sqft_per_bag": 75, "bag_lb": 50, "note": "~75 sqft per 50 lb bag (1/4 x 1/4 trowel). Applied to all tiled substrate (floor + walls)." },
+        "grout": { "coverage_sqft_per_bag": 100, "coverage_sqft_per_bag_small_tile": 50, "bag_lb": 25, "note": "~100 sqft per 25 lb bag (~12in tile). Mosaic/small tile drops to ~50 sqft/bag." },
+        "waterproofing": { "coverage_sqft_per_roll": 175, "roll_label": "roll (kit)", "note": "Sheet/liquid waterproofing membrane over the wet zone (surround walls + tiled pan). ~175 sqft per roll/kit (conservative)." },
+        "backer_board": { "sheet_sqft": 15, "waste_pct": 0.10, "note": "1/2 in cement backer board, 3x5 sheet = 15 sqft, behind wet-wall tile. 10% waste for cuts." },
+        "drywall": { "sheet_sqft": 32, "waste_pct": 0.15, "note": "4x8 sheet = 32 sqft, 15% bathroom waste (cutouts). Dry walls only; wet walls use backer board." },
+        "joint_compound": { "lb_per_100sqft": 30, "bucket_lb": 61.7, "note": "~30 lb per 100 sqft (Level 4). ~4.5-gal (~61.7 lb) ready-mix bucket." },
+        "drywall_tape": { "sqft_per_lf": 2, "roll_lf": 250, "note": "Tape ~2 sqft per LF; 250 ft rolls." },
+        "drywall_screws": { "per_sheet": 32, "per_box": 350, "note": "~32 screws per 4x8 sheet; ~350 per 1 lb box." },
+        "vanity": { "made_to_measure": true, "note": "Linear feet, made-to-measure -> NO waste factor. Field-verify before ordering." },
+        "vanity_top": { "sqft_per_lf": 1.8, "waste_pct_solid": 0.15, "waste_pct_veined": 0.25, "note": "~1.8 sqft per vanity LF (22in deep). Slab order adds 15% (solid) to 25% (veined) cutting waste. Field-verify." }
+      },
+
+      "fixtures": {
+        "plumbing": [
+          { "item": "Toilet", "qty": 1, "unit": "ea", "note": "Confirm rough-in (10/12/14 in) and one-piece vs two-piece." },
+          { "item": "Vanity sink + faucet", "qty": 1, "unit": "set", "note": "Sink/basin + faucet; add a second for a double vanity." },
+          { "item": "Supply lines (hot + cold)", "qty": 2, "unit": "ea", "note": "Braided stainless to the vanity; toilet uses one cold supply." },
+          { "item": "Angle-stop shutoff valves", "qty": 3, "unit": "ea", "note": "Two under the vanity (hot/cold) + one for the toilet." },
+          { "item": "P-trap assembly", "qty": 1, "unit": "set", "note": "Vanity drain with tailpiece and washers." },
+          { "item": "Shower / tub valve + trim", "qty": 1, "unit": "set", "note": "Pressure-balanced or thermostatic valve + trim kit. Omit if showerType is none." },
+          { "item": "Tub or shower base / drain", "qty": 1, "unit": "ea", "note": "Tub, or a shower pan/base + drain assembly for a walk-in." },
+          { "item": "Waste / vent connections", "qty": 1, "unit": "set", "note": "DWV for toilet, vanity, and shower/tub per local code." }
+        ],
+        "electrical": [
+          { "item": "Bathroom branch circuit (20A)", "qty": 1, "unit": "circuit", "note": "NEC: a dedicated 20A circuit for bathroom receptacles." },
+          { "item": "GFCI receptacle", "qty": 1, "unit": "ea", "note": "GFCI-protected receptacle near the vanity." },
+          { "item": "Exhaust fan (+ vent to exterior)", "qty": 1, "unit": "ea", "note": "Ducted to the outside; size to room volume. Consider fan/light combo." },
+          { "item": "Vanity lighting", "qty": 1, "unit": "ea", "note": "Vanity/sconce lighting fixture(s); one switched circuit." },
+          { "item": "Romex / NM cable", "qty_per_circuit_ft": 30, "unit": "ft", "note": "Rough estimate ~30 ft per circuit; size 12/2 (20A) per actual runs." }
+        ]
+      },
+
+      "pricing": {
+        "tiers": ["good", "better", "best"],
+        "tier_labels": { "good": "Good - builder grade", "better": "Better - mid-grade", "best": "Best - premium" },
+        "defaults": { "tier": "better", "markup_pct": 20, "labor_pct_of_materials": 100 },
+        "labor": { "basis": "pct_of_materials", "default_pct": 100, "note": "ROUGHEST number: labor defaults to 1:1 with material cost. Override with laborPct or laborCost." },
+        "lines": {
+          "floor_tile": { "price_unit": "sqft", "search": { "good": "ceramic floor tile", "better": "porcelain floor tile", "best": "natural stone floor tile" } },
+          "wall_tile": { "price_unit": "sqft", "search": { "good": "ceramic wall tile", "better": "porcelain shower wall tile", "best": "natural stone mosaic shower tile" } },
+          "thinset": { "price_unit": "50 lb bag", "search": { "good": "thinset mortar 50 lb", "better": "modified thinset mortar 50 lb", "best": "premium large format thinset mortar 50 lb" } },
+          "grout": { "price_unit": "25 lb bag", "search": { "good": "sanded grout 25 lb", "better": "stain resistant sanded grout 25 lb", "best": "epoxy grout" } },
+          "waterproofing_membrane": { "price_unit": "roll", "search": { "good": "waterproofing membrane roll", "better": "schluter kerdi waterproofing membrane", "best": "shower waterproofing kit" } },
+          "cement_backer_board": { "price_unit": "sheet", "search": { "good": "1/2 in cement board 3x5", "better": "hardiebacker cement board 1/2 in", "best": "durock cement board 1/2 in" } },
+          "drywall_sheets": { "price_unit": "sheet", "search": { "good": "1/2 in drywall 4x8", "better": "1/2 in mold resistant drywall 4x8", "best": "1/2 in mold and moisture resistant drywall 4x8" } },
+          "joint_compound": { "price_unit": "4.5-gal bucket", "search": { "good": "all purpose joint compound bucket", "better": "lightweight all purpose joint compound bucket", "best": "plus 3 lightweight joint compound bucket" } },
+          "drywall_tape": { "price_unit": "250 ft roll", "search": { "good": "paper drywall joint tape 250 ft", "better": "self adhesive mesh drywall tape", "best": "paper drywall joint tape 500 ft" } },
+          "drywall_screws": { "price_unit": "1 lb box", "search": { "good": "1-1/4 in coarse drywall screws 1 lb", "better": "1-1/4 in coarse drywall screws 5 lb", "best": "1-1/4 in fine drywall screws collated" } },
+          "vanity": { "price_unit": "LF", "field_estimate": true, "search": { "good": "single sink bathroom vanity", "better": "shaker bathroom vanity with top", "best": "solid wood bathroom vanity soft close" } },
+          "vanity_top": { "price_unit": "sqft", "field_estimate": true, "search": { "good": "cultured marble vanity top", "better": "quartz vanity top", "best": "granite vanity top" } }
         }
       }
     }

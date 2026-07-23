@@ -139,6 +139,7 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   check('extractProduct: BigBox search_results[].product', extractProduct({ search_results: [{ product: { title: 'B', price: 9.99 } }] }).price === 9.99);
   check('extractProduct: flat product', extractProduct({ product: { title: 'C', price: '$3' } }).price === 3);
   check('extractProduct: nothing usable -> null', extractProduct({ foo: 'bar' }) === null);
+  check('extractProduct normalizes apionline -> www.homedepot.com', extractProduct({ products: [{ title: 'T', price: 5, link: 'https://apionline.homedepot.com/p/x/123' }] }).url === 'https://www.homedepot.com/p/x/123');
 
   const url = buildSearchUrl('', 'SECRET', 'thinset mortar 50 lb');
   check('buildSearchUrl default = SerpApi home_depot + q + api_key', /serpapi\.com/.test(url) && /q=thinset%20mortar%2050%20lb/.test(url) && /api_key=SECRET/.test(url));
