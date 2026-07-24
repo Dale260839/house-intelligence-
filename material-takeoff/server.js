@@ -40,6 +40,7 @@
  */
 
 const http = require('http');
+const fs = require('fs');
 const { URL } = require('url');
 
 const {
@@ -59,6 +60,13 @@ const DATASET = loadDataset();
 const { limiter: RATE_LIMITER, enabled: RATE_ENABLED, label: RATE_LABEL } = selectRateLimiter();
 const RATE_SWEEP = setInterval(() => RATE_LIMITER.sweep(), 60000);
 if (RATE_SWEEP.unref) RATE_SWEEP.unref();
+
+// The BuildSuite demo page, served from THIS server so it is same-origin with the API
+// (no CORS, no local server, no file:// restrictions — just open /demo in any browser).
+// Read once at boot; optional, so a missing file never breaks the API.
+let DEMO_HTML = null;
+try { DEMO_HTML = fs.readFileSync(__dirname + '/buildsuite-demo.html', 'utf8'); }
+catch { /* demo page not deployed — /demo will 404 */ }
 
 const PORT = Number(process.env.PORT) || 3100;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -210,6 +218,21 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 429, { ok: false, error: 'rate_limited',
           message: `Too many requests. Try again in ${retryS}s.`, retry_after_s: retryS });
       }
+    }
+
+    // Demo UI — same-origin with the API, so it works from any browser with no CORS
+    // and no local server. See buildsuite-demo.html.
+    if (req.method === 'GET' && (path === '/demo' || path === '/demo.html')) {
+      if (!DEMO_HTML) {
+        return sendJson(res, 404, { ok: false, error: 'demo_unavailable',
+          message: 'buildsuite-demo.html is not deployed with this service.' });
+      }
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': Buffer.byteLength(DEMO_HTML),
+        'Cache-Control': 'no-cache',
+      });
+      return res.end(DEMO_HTML);
     }
 
     if (req.method === 'GET' && path === '/') return handleIndex(res);

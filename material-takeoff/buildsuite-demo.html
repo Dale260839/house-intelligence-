@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Material Takeoff — BuildSuite Integration Demo</title>
+<style>
+  :root{
+    --navy:#0F2A47; --navy-2:#17395E; --ink:#1B2733; --muted:#64748B;
+    --line:#E2E8F0; --bg:#F1F5F9; --card:#FFFFFF;
+    --brand:#0E9F6E; --brand-dk:#087A54; --amber:#B45309; --amber-bg:#FEF3C7;
+    --blue:#1D4ED8; --blue-bg:#EFF6FF; --danger:#B91C1C; --danger-bg:#FEF2F2;
+    --radius:10px; --shadow:0 1px 2px rgba(16,24,40,.06),0 8px 24px -12px rgba(16,24,40,.18);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+       -webkit-font-smoothing:antialiased}
+  header{background:linear-gradient(135deg,var(--navy),var(--navy-2));color:#fff;padding:18px 24px}
+  .hwrap{max-width:1240px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  header h1{margin:0;font-size:17px;font-weight:700;letter-spacing:.01em}
+  header p{margin:3px 0 0;font-size:12.5px;color:#B7C7DA}
+  .pill{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+        padding:4px 10px;border-radius:999px;font-size:11.5px;font-weight:600}
+  main{max-width:1240px;margin:0 auto;padding:20px 24px 56px;display:grid;
+       grid-template-columns:376px 1fr;gap:20px;align-items:start}
+  @media (max-width:1000px){main{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow)}
+  .card-pad{padding:16px}
+  .sec{border-top:1px solid var(--line);padding:14px 16px}
+  .sec:first-child{border-top:0}
+  .sec h3{margin:0 0 10px;font-size:11px;font-weight:700;text-transform:uppercase;
+          letter-spacing:.07em;color:var(--muted)}
+  label{display:block;font-size:12.5px;font-weight:600;margin:0 0 4px}
+  .hint{font-weight:400;color:var(--muted)}
+  input[type=text],input[type=number],select{width:100%;padding:8px 10px;border:1px solid var(--line);
+    border-radius:7px;font:inherit;font-size:13.5px;background:#fff;color:var(--ink)}
+  input:focus,select:focus{outline:0;border-color:var(--brand);box-shadow:0 0 0 3px rgba(14,159,110,.13)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .field{margin-bottom:10px}
+  .check{display:flex;align-items:flex-start;gap:8px;margin:7px 0;font-size:13px;font-weight:500}
+  .check input{margin-top:2px;accent-color:var(--brand);width:15px;height:15px}
+  button{width:100%;padding:11px;border:0;border-radius:8px;background:var(--brand);color:#fff;
+         font:inherit;font-weight:700;cursor:pointer}
+  button:hover{background:var(--brand-dk)}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  .muted{color:var(--muted)}
+  .small{font-size:12px}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:700}
+  td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .qty{font-weight:700}
+  .tag{display:inline-block;font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;margin-left:6px}
+  .t-fv{background:var(--amber-bg);color:var(--amber)}
+  .t-add{background:var(--blue-bg);color:var(--blue)}
+  .t-pack{background:#ECFDF5;color:var(--brand-dk)}
+  .banner{padding:11px 14px;border-radius:8px;font-size:13px;margin-bottom:14px}
+  .b-info{background:var(--blue-bg);color:#1E3A8A;border:1px solid #BFDBFE}
+  .b-warn{background:var(--amber-bg);color:#92400E;border:1px solid #FDE68A}
+  .b-err{background:var(--danger-bg);color:var(--danger);border:1px solid #FECACA}
+  .money{display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-variant-numeric:tabular-nums}
+  .money .k{color:var(--muted)}
+  .money .v{text-align:right;font-weight:600}
+  .money .rule{grid-column:1/-1;border-top:1px solid var(--line);margin:4px 0}
+  .money .big{font-size:16px;font-weight:800;color:var(--navy)}
+  .money .profit{color:var(--brand-dk);font-weight:800}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:10px;margin-bottom:14px}
+  .kpi{background:#F8FAFC;border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+  .kpi .n{font-size:17px;font-weight:800;color:var(--navy);line-height:1.2}
+  .kpi .l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+  ul.chk{list-style:none;margin:0;padding:0;columns:2;column-gap:18px}
+  @media (max-width:640px){ul.chk{columns:1}}
+  ul.chk li{font-size:12.5px;padding:3px 0;break-inside:avoid}
+  ul.chk b{color:var(--navy)}
+  details{margin-top:14px}
+  summary{cursor:pointer;font-size:12px;color:var(--muted);font-weight:600}
+  pre{background:#0B1220;color:#CBD5E1;padding:12px;border-radius:8px;overflow:auto;font-size:11.5px;max-height:420px}
+  code{background:#F1F5F9;padding:1px 5px;border-radius:4px;font-size:12px}
+  .endpoint{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;color:var(--muted);
+            word-break:break-all;margin-top:8px}
+  .spin{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.45);
+        border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="hwrap">
+    <div>
+      <h1>Material Takeoff — BuildSuite Integration Demo</h1>
+      <p>Contractor enters a project → order-ready material list, rough-in checklist, and live pricing with a profit layout.</p>
+    </div>
+    <span class="pill" id="apiPill">connecting…</span>
+  </div>
+</header>
+
+<main>
+  <!-- ───────── form ───────── -->
+  <form class="card" id="form">
+    <div class="sec">
+      <h3>Connection</h3>
+      <div class="field">
+        <label>API base URL <span class="hint" id="baseNote"></span></label>
+        <input type="text" id="apiBase" />
+      </div>
+      <div class="field" style="margin:0">
+        <label>Project type <span class="hint">(from <code>GET /project-types</code>)</span></label>
+        <select id="projectType"></select>
+      </div>
+    </div>
+
+    <!-- dynamically rendered from the API's input contract -->
+    <div id="dynamicFields"></div>
+
+    <div class="sec">
+      <h3>Pricing &amp; profit</h3>
+      <label class="check"><input type="checkbox" id="price" /> <span>Include live Home Depot pricing</span></label>
+      <div id="priceOpts" style="display:none">
+        <div class="grid2">
+          <div class="field"><label>Quality tier</label>
+            <select id="tier">
+              <option value="good">Good (builder)</option>
+              <option value="better" selected>Better (mid)</option>
+              <option value="best">Best (premium)</option>
+            </select></div>
+          <div class="field"><label>Markup <span class="hint">%</span></label>
+            <input type="number" id="markupPct" value="20" min="0" /></div>
+        </div>
+        <div class="field" style="margin:0"><label>Labor <span class="hint">% of materials</span></label>
+          <input type="number" id="laborPct" value="100" min="0" /></div>
+        <p class="small muted" style="margin:8px 0 0">Live pricing calls a third-party API — expect a few seconds.</p>
+      </div>
+    </div>
+
+    <div class="sec">
+      <button type="submit" id="go">Generate takeoff</button>
+      <div class="endpoint" id="curl"></div>
+    </div>
+  </form>
+
+  <!-- ───────── results ───────── -->
+  <section class="card card-pad" id="out">
+    <p class="muted">Loading the project-type contract from the API…</p>
+  </section>
+</main>
+
+<script>
+/* =====================================================================
+   BuildSuite ↔ Material Takeoff — reference integration
+   1) GET  /material-takeoff/project-types   → render the form dynamically
+   2) POST /material-takeoff                 → takeoff (+ optional pricing)
+   3) render: always quantities; pricing only when pricing.ok === true
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+
+/* Where to call the API.
+   - Served from the API itself (e.g. /demo)  -> same origin: no CORS at all.
+   - Opened as a local file (file://)          -> fall back to production, because a
+     file:// page is an opaque origin and browsers restrict its requests.
+   Either way it works with no local server. */
+const PROD = 'https://house-intelligence-production-f7f6.up.railway.app';
+const SERVED = location.protocol === 'http:' || location.protocol === 'https:';
+$('apiBase').value = SERVED ? location.origin : PROD;
+$('baseNote').textContent = SERVED ? '(same origin — no CORS)' : '(opened as a file — using production)';
+
+const base = () => $('apiBase').value.replace(/\/+$/, '');
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money = n => '$' + Number(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+
+let CONTRACT = [];                       // project types from the API
+const ADDON_KEYS = ['demolition_dumpster','subfloor','primer','paint','baseboard','cabinet_hardware'];
+
+/* ---------- 1. load the input contract & build the form ---------- */
+async function loadContract(){
+  const res = await fetch(base() + '/material-takeoff/project-types');
+  const data = await res.json();
+  CONTRACT = data.project_types || [];
+  $('projectType').innerHTML = CONTRACT.map(p => `<option value="${p.id}">${esc(p.label)}</option>`).join('');
+  $('apiPill').textContent = CONTRACT.length + ' project types';
+  renderFields();
+}
+
+// Group the API's inputs into sensible UI sections purely from the contract.
+function groupOf(inp){
+  const n = inp.name;
+  if (/^include/.test(n) || n === 'paintCoats') return 'addons';
+  if (/roomShape|wallPerimeterLF|BoxSqft|SlabSqft|TileLayout/.test(n)) return 'accuracy';
+  return 'details';
+}
+
+function fieldHTML(i){
+  const id = 'f_' + i.name;
+  const unit = i.unit ? ` <span class="hint">(${esc(i.unit)})</span>` : '';
+  const ph = i.default === null || i.default === undefined ? 'auto / optional' : '';
+  if (i.type === 'boolean'){
+    return `<label class="check" title="${esc(i.description)}">
+      <input type="checkbox" id="${id}" ${i.default ? 'checked' : ''}/> <span>${esc(labelize(i.name))}</span></label>`;
+  }
+  if (i.type === 'enum'){
+    const opts = (i.allowed||[]).map(a => `<option value="${a}" ${a===i.default?'selected':''}>${esc(a)}</option>`).join('');
+    const blank = i.default === null ? '<option value="">— default —</option>' : '';
+    return `<div class="field"><label title="${esc(i.description)}">${esc(labelize(i.name))}${unit}</label>
+      <select id="${id}">${blank}${opts}</select></div>`;
+  }
+  return `<div class="field"><label title="${esc(i.description)}">${esc(labelize(i.name))}${unit}</label>
+    <input type="number" id="${id}" ${i.default!=null?`value="${i.default}"`:''} placeholder="${ph}" ${i.min!=null?`min="${i.min}"`:''}/></div>`;
+}
+
+const labelize = n => n.replace(/([A-Z])/g,' $1').replace(/^./,c=>c.toUpperCase())
+                       .replace(/ Sqft/,' sqft').replace(/ L F/,' LF').replace(/Include /,'');
+
+function renderFields(){
+  const pt = CONTRACT.find(p => p.id === $('projectType').value);
+  if (!pt) return;
+  const req = pt.required_inputs || [], opt = pt.optional_inputs || [];
+  const g = k => opt.filter(i => groupOf(i) === k);
+  const sec = (title, html, note) => html ? `<div class="sec"><h3>${title}</h3>${note||''}${html}</div>` : '';
+
+  $('dynamicFields').innerHTML =
+    sec('Project basics', req.map(fieldHTML).join('') + g('details').map(fieldHTML).join('')) +
+    sec('Accuracy &amp; vendor packs', g('accuracy').map(fieldHTML).join(''),
+        '<p class="small muted" style="margin:-2px 0 8px">Room shape refines the wall estimate; box/slab sizes order in whole boxes &amp; slabs.</p>') +
+    sec('Optional scope (add-ons)', g('addons').map(fieldHTML).join(''),
+        '<p class="small muted" style="margin:-2px 0 8px">Off by default — each adds its own material line(s).</p>');
+}
+
+/* ---------- 2. build the request from the form ---------- */
+function buildBody(){
+  const pt = CONTRACT.find(p => p.id === $('projectType').value);
+  const body = { projectType: pt.id };
+  [...(pt.required_inputs||[]), ...(pt.optional_inputs||[])].forEach(i => {
+    const el = $('f_' + i.name); if (!el) return;
+    if (i.type === 'boolean'){ if (el.checked) body[i.name] = true; return; }
+    const v = el.value;
+    if (v === '' || v == null) return;
+    body[i.name] = i.type === 'number' ? Number(v) : v;
+  });
+  if ($('price').checked){
+    body.price = true;
+    body.tier = $('tier').value;
+    body.markupPct = Number($('markupPct').value);
+    body.laborPct  = Number($('laborPct').value);
+  }
+  return body;
+}
+
+/* ---------- 3. render ---------- */
+function mathCell(m){
+  if (m.type === 'made_to_measure') return `${m.raw} ${esc(m.raw_unit)} <span class="muted small">made-to-measure</span>`;
+  if (m.type === 'coverage')        return `${m.raw} ${esc(m.raw_unit)} <span class="muted small">@ ${m.coverage} ${esc(m.coverage_unit)}</span>`;
+  if (m.type === 'pack_round')      return `${m.raw} ${esc(m.raw_unit)} +${m.waste_pct}% → ${m.covered_qty} ${esc(m.covered_unit)} <span class="muted small">@ ${m.pack_size}/${esc(m.pack_unit)}</span>`;
+  return `${m.raw} ${esc(m.raw_unit)} <span class="muted small">+${m.waste_pct}% waste</span>`;
+}
+
+function render(t){
+  if (!t.ok){
+    $('out').innerHTML = `<div class="banner b-err"><b>${esc(t.error||'error')}</b><br>${esc(t.message||'')}</div>`;
+    return;
+  }
+  const p = t.pricing, priced = p && p.ok;
+  const costOf = key => {
+    if (!priced) return '';
+    const l = p.lines.find(x => x.key === key);
+    if (l) return `<td class="num">${money(l.line_cost)}</td>`;
+    const u = p.unpriced_lines.find(x => x.key === key);
+    return `<td class="num muted small" title="${esc(u?u.reason:'')}">n/a</td>`;
+  };
+
+  const rows = t.materials.map(m => `<tr>
+      <td><b>${esc(m.label)}</b>
+        ${m.field_verify ? '<span class="tag t-fv">field-verify</span>' : ''}
+        ${m.type === 'pack_round' ? '<span class="tag t-pack">pack</span>' : ''}
+        ${ADDON_KEYS.includes(m.key) ? '<span class="tag t-add">add-on</span>' : ''}
+        <div class="muted small">${esc(m.basis||'')}</div></td>
+      <td class="small">${mathCell(m)}</td>
+      <td class="num qty">${m.order_qty} <span class="muted small">${esc(m.order_unit)}</span></td>
+      ${costOf(m.key)}
+    </tr>`).join('');
+
+  const d = t.derived || {};
+  const kpis = [
+    ['Material lines', t.materials.length],
+    ...Object.entries(d).slice(0,3).map(([k,v]) => [k.replace(/_/g,' '), v]),
+  ].map(([l,n]) => `<div class="kpi"><div class="n">${esc(n)}</div><div class="l">${esc(l)}</div></div>`).join('');
+
+  const chk = g => (t.fixtures_checklist?.[g]||[])
+    .map(f => `<li><b>${esc(f.qty)} ${esc(f.unit)}</b> — ${esc(f.item)}${f.estimate?' <span class="muted">(est.)</span>':''}</li>`).join('');
+
+  let profit = '';
+  if (priced){
+    const g = p.profit_layout;
+    profit = `<div class="card card-pad" style="margin-bottom:14px;background:#F8FAFC">
+      <h3 style="margin:0 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)">
+        Profit layout <span class="tag t-pack">${esc(p.tier_label||p.tier)}</span>
+        <span class="muted" style="font-weight:400;text-transform:none;letter-spacing:0">· source: ${esc(p.source)}</span></h3>
+      <div class="money">
+        <div class="k">Materials</div><div class="v">${money(g.materials_cost)}</div>
+        <div class="k">Labor <span class="small">(${p.labor?.pct_of_materials ?? '—'}% of materials)</span></div><div class="v">${money(g.labor_cost)}</div>
+        <div class="rule"></div>
+        <div class="k">Total cost</div><div class="v">${money(g.total_cost)}</div>
+        <div class="k">Markup</div><div class="v">${g.markup_pct}%</div>
+        <div class="rule"></div>
+        <div class="k big">Client price</div><div class="v big">${money(g.price)}</div>
+        <div class="k profit">Profit <span class="small">(${g.margin_pct}% margin)</span></div><div class="v profit">${money(g.profit)}</div>
+      </div>
+      ${p.fully_priced ? '' : `<div class="banner b-warn" style="margin:12px 0 0">${p.unpriced_lines.length} line(s) couldn't be priced — totals cover the rest.</div>`}
+    </div>`;
+  } else if (p){
+    profit = `<div class="banner b-warn"><b>Pricing unavailable</b> — ${esc(p.reason||'')}. Quantities below are unaffected.</div>`;
+  }
+
+  $('out').innerHTML = `
+    <div class="banner b-info">${esc(t.summary)}</div>
+    <div class="kpis">${kpis}</div>
+    ${profit}
+    <table>
+      <thead><tr><th>Material</th><th>Math</th><th class="num">Order</th>${priced?'<th class="num">Cost</th>':''}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div class="sec" style="border-top:1px solid var(--line);margin-top:14px;padding:14px 0 0">
+      <h3>Plumbing rough-in</h3><ul class="chk">${chk('plumbing')}</ul>
+      <h3 style="margin-top:12px">Electrical rough-in</h3><ul class="chk">${chk('electrical')}</ul>
+    </div>
+    <div class="banner b-warn" style="margin:14px 0 0">⚠ ${esc(t.disclaimer)}</div>
+    <details><summary>Raw JSON response</summary><pre>${esc(JSON.stringify(t,null,2))}</pre></details>`;
+}
+
+/* ---------- wiring ---------- */
+$('price').addEventListener('change', e => $('priceOpts').style.display = e.target.checked ? 'block' : 'none');
+$('projectType').addEventListener('change', renderFields);
+$('apiBase').addEventListener('change', () => loadContract().catch(showConnErr));
+
+$('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const body = buildBody();
+  $('curl').textContent = `POST ${base()}/material-takeoff  ${JSON.stringify(body)}`;
+  $('go').disabled = true;
+  $('go').innerHTML = '<span class="spin"></span>' + (body.price ? 'Pricing (live)…' : 'Generating…');
+  try{
+    const res = await fetch(base() + '/material-takeoff', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)
+    });
+    if (res.status === 429){
+      const ra = res.headers.get('Retry-After');
+      $('out').innerHTML = `<div class="banner b-warn"><b>Rate limited (429)</b> — retry in ${esc(ra||'a moment')}s.</div>`;
+    } else {
+      render(await res.json());
+    }
+  }catch(err){
+    showConnErr(err);
+  }finally{
+    $('go').disabled = false; $('go').textContent = 'Generate takeoff';
+  }
+});
+
+function showConnErr(err){
+  $('apiPill').textContent = 'offline';
+  $('out').innerHTML = `<div class="banner b-err"><b>Request failed:</b> ${esc(err.message)}<br>
+    Check the API base URL. For a local server: <code>npm start</code> then use <code>http://localhost:3100</code>.</div>`;
+}
+
+// boot
+loadContract()
+  .then(() => { $('out').innerHTML = '<p class="muted">Form built from the API contract. Fill it in and hit <b>Generate takeoff</b>.</p>'; })
+  .catch(showConnErr);
+</script>
+</body>
+</html>

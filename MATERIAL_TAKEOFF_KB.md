@@ -29,11 +29,21 @@ repo). Called server-to-server by BuildSuite. **US-only.**
 | **Pack-size rounding** | ✅ Live | tile → boxes, countertop/vanity top → slabs |
 | **Live pricing** | ✅ **Live via SerpApi** | Verified 11/11 lines priced with real HD products |
 | **Rate limiting** | ✅ Live | 120 req / 60s per client IP |
-| **Add-on groups** (Phase 4) | 🟡 **Local — not deployed** | demolition, subfloor, paint, trim, hardware — built + tested (298 tests), pending commit/push |
+| **Add-on groups** (Phase 4) | ✅ **Live** | demolition, subfloor, paint, trim, hardware — verified in prod (17-line kitchen) |
 | Auth / persistence | ❌ Not yet | Roadmap Phase 7 (before billing) |
 
-**Verified prod call:** `kitchen_remodel` 200 sqft, tier `better` → 11/11 priced, 0 unpriced,
-client price ≈ $44.4k, profit ≈ $7.4k at 16.7% margin.
+**Verified live in prod (2026-07-16):** `project-types` → 2 types · kitchen 200 sqft → 11 lines ·
+all 5 add-ons on → **17 lines** · `floorTileBoxSqft=15.5` → `pack_round` **14 box** ·
+`roomShape=galley` → 65.1 LF perimeter / 18 sheets · priced 11/11 via SerpApi · 429 + `X-RateLimit-*`
+headers present.
+
+### Uncommitted local files
+| File | What it is |
+|---|---|
+| `material-takeoff/buildsuite-demo.html` | Single-file BuildSuite integration demo (see §11). Not pushed. |
+
+Everything else is committed and pushed — `main` is in sync with `origin/main`
+(latest: `ec30e3e` Phase 4 add-on line groups).
 
 ---
 
@@ -106,7 +116,7 @@ per box/slab** (this is what fixes the per-case tile pricing over-count).
 **Per-surface tile layouts** — floor vs backsplash/wall can differ; grout drops to small-tile coverage
 if either is `mosaic`.
 
-**Add-on groups (Phase 4 — local)** — five optional scope groups on both types, each **off by default**:
+**Add-on groups (Phase 4)** — five optional scope groups on both types, each **off by default**:
 
 | Toggle | Adds | Derivation |
 |---|---|---|
@@ -174,8 +184,8 @@ rate_limiter.js · server.js · smoke_pricing.js
 
 ## 10. Roadmap (remaining)
 
-Detail + estimates in `MATERIAL_TAKEOFF_PLAN.md`. **Done:** Phase 0 (builders), 1 (bathroom),
-2 (room shapes), 3 (pack sizes + per-surface tile), **4 (add-on groups — local, pending deploy)**.
+Detail + estimates in `MATERIAL_TAKEOFF_PLAN.md`. **Done & deployed:** Phase 0 (pluggable builders),
+1 (bathroom type), 2 (room shapes), 3 (pack sizes + per-surface tile), **4 (add-on groups)**.
 
 | Phase | Item | Effort |
 |---|---|---|
@@ -190,7 +200,32 @@ Quick wins: tune the countertop search term, fix the em-dash labels.
 
 ---
 
-## 11. Quick commands
+## 11. BuildSuite integration demo (`material-takeoff/buildsuite-demo.html`)
+
+A **single self-contained HTML file** (no server, no build, no dependencies) demonstrating the
+intended BuildSuite integration. Open it directly in a browser — it points at prod by default and
+works from the filesystem because CORS is `*`.
+
+What it shows a frontend dev:
+1. **The form is generated from the API**, not hardcoded — it calls `GET /material-takeoff/project-types`
+   and renders every field from the contract (type → input/checkbox/select, defaults, units, min,
+   allowed values, descriptions as tooltips), auto-grouped into *Project basics* / *Accuracy & vendor
+   packs* / *Optional scope (add-ons)*. **Add a project type or input server-side and the UI picks it
+   up with zero frontend changes.**
+2. **Contractor-facing output** — summary, KPI tiles from `derived`, the material order list with each
+   line's auditable `basis`, and badges for `field-verify`, `pack` (box/slab), and `add-on`.
+3. **The profit layout** — materials → labor → cost → markup → client price → profit + margin,
+   rendered **only when `pricing.ok`**, with a graceful "pricing unavailable" banner otherwise
+   (quantities and pricing are independent).
+4. **Real-world handling** — loading state for the slow live-pricing call, a **429** branch that reads
+   `Retry-After`, per-line `n/a` for unpriced lines, the disclaimer, and a raw-JSON drawer.
+
+Point the API base field at `http://localhost:3100` to run it against a local server.
+⚠️ Ticking live pricing spends ~11–17 SerpApi credits per run — go easy during demos.
+
+---
+
+## 12. Quick commands
 
 ```bash
 cd material-takeoff && npm test                       # 269 tests
