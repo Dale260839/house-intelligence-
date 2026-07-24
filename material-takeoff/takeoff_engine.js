@@ -25,6 +25,7 @@ const path = require('path');
 const BUILDERS = {
   kitchen_remodel: require('./builders/kitchen_remodel.js'),
   bathroom_remodel: require('./builders/bathroom_remodel.js'),
+  flooring_only: require('./builders/flooring_only.js'),
 };
 
 function loadDataset(datasetPath) {

@@ -7,8 +7,8 @@ already include standard waste factors, with the raw measurement and waste % sho
 is auditable. JSON in / JSON out, **CORS enabled** (callable from the browser). No API key.
 
 > Sibling of the House Intelligence API (`/scope`, `/rows`), deployed as a separate service from
-> the same repo. **Supported project types: `kitchen_remodel` and `bathroom_remodel`.** Each has its
-> own inputs — always discover them via `GET /material-takeoff/project-types` (§3).
+> the same repo. **Supported project types: `kitchen_remodel`, `bathroom_remodel`, `flooring_only`.**
+> Each has its own inputs — always discover them via `GET /material-takeoff/project-types` (§3).
 
 ---
 
@@ -88,7 +88,7 @@ fall into three groups: **A** describes the job, **B** controls output format, *
 ### A. Takeoff inputs (describe the job)
 
 Inputs are **per project type** — `projectType` (always required) selects the type, and each type
-declares its own fields. The authoritative list is `GET /material-takeoff/project-types`; the two
+declares its own fields. The authoritative list is `GET /material-takeoff/project-types`; the three
 built-in types are documented below.
 
 #### `kitchen_remodel`
@@ -181,6 +181,33 @@ built-in types are documented below.
 | `markupPct` | number (%) | `20` | Markup on total cost: `price = cost × (1 + markupPct/100)`. |
 | `laborPct` | number (%) | `100` | Labor as a **percent of material cost**. Default 1:1 is a rough rule of thumb — override per job. |
 | `laborCost` | number ($) | — | Explicit labor dollars. **Overrides `laborPct`** when given. |
+
+### A3. `flooring_only` inputs
+
+A flooring-only job: one material over a floor area, plus what goes under and around it.
+**Required:** `floorSqft`.
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `flooringType` | enum | `lvp` | `tile` / `lvp` / `laminate` / `engineered` / `hardwood`. **Drives the setting materials** — see below. |
+| `tileLayout` | enum | `straight` | Install layout → waste % (straight 7 / diagonal 15 / herringbone 20 / mosaic 20). |
+| `flooringBoxSqft` | number (sqft) | — | Coverage per box/carton → orders in whole **boxes** (`pack_round`) and prices per box. |
+| `includeUnderlayment` | boolean | `true` | Cement backer board (tile) or foam/moisture barrier (others). |
+| `includeTransitions` | boolean | `true` | One transition strip per doorway. |
+| `openings` | number | `2` | Doorways — drives transitions and shortens the baseboard run. |
+| `roomShape` · `wallPerimeterLF` | enum · number | `square` · — | Only used by the optional baseboard add-on. |
+| `includeDemolition` · `includeSubfloor` · `includeTrim` | boolean | `false` | Add-on groups (§3.D). Paint/hardware don't apply to a floor. |
+
+**What `flooringType` adds:**
+
+| Type | Line key | Also ordered |
+|---|---|---|
+| `tile` | `flooring_tile` | cement backer board + thinset + grout |
+| `lvp` / `laminate` | `flooring_lvp` / `flooring_laminate` | foam / moisture-barrier underlayment |
+| `engineered` / `hardwood` | `flooring_engineered` / `flooring_hardwood` | underlayment + fasteners (cleats/staples) |
+
+Plus `transitions`. **No plumbing/electrical rough-in** — `fixtures_checklist` comes back empty for
+this type. Labor defaults to **60%** of materials here (vs 100% for full remodels).
 
 ### D. Add-on groups (opt-in — extra scope beyond the core material list)
 
@@ -488,8 +515,9 @@ curl -i -X POST https://house-intelligence-production-f7f6.up.railway.app/materi
 
 ## 7. Limitations (what it does NOT do — yet)
 
-1. **Two project types** — `kitchen_remodel` and `bathroom_remodel`. Any other `projectType` → 400.
-   (More types are data-driven to add; see the roadmap.)
+1. **Three project types** — `kitchen_remodel`, `bathroom_remodel`, `flooring_only`. Any other
+   `projectType` → 400. (Whole-home / multi-room scoping is still on the roadmap; new single-room
+   types are data-driven to add.)
 2. **Estimates, not measurements.** Quantities are derived from floor area. The wall-perimeter model
    is now **shape-aware** (`roomShape`: square → u_shaped, plus kitchen `island`), but it's still an
    estimate — for accuracy pass the known-measurement overrides (`cabinetLF`, `countertopSqft`,
@@ -558,7 +586,7 @@ not a substitute for field measurement.
 
 ---
 
-_Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 29 add-ons +
-61 pricing + 24 rate-limit + 37 HTTP tests = 298). Standards are sourced in `material_dataset.json`
+_Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 29 add-ons + 53 flooring +
+61 pricing + 24 rate-limit + 37 HTTP tests = 351). Standards are sourced in `material_dataset.json`
 `_meta`. House Intelligence is untouched — separate service, shared repo._
 

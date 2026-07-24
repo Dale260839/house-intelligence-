@@ -18,7 +18,7 @@
       "Thinset: ~75-80 sqft per 50 lb bag (1/4 x 1/4 trowel).",
       "Grout: ~100 sqft per 25 lb bag (12in tile, 1/8in joints); smaller tile / mosaic uses more."
     ],
-    "supported_project_types": ["kitchen_remodel", "bathroom_remodel"],
+    "supported_project_types": ["kitchen_remodel", "bathroom_remodel", "flooring_only"],
     "last_reviewed": "2026-07-16",
     "pricing_disclaimer": "Prices are LIVE from a third-party Home Depot pricing API at request time and are matched to a search term per quality tier, NOT to your exact chosen SKU. Treat them as a budgetary estimate, not a quote. Labor is a rough rule-of-thumb figure you should override per job. The markup/profit layout is arithmetic on those inputs, not tax/overhead/financial advice.",
     "pricing_sources": [
@@ -582,6 +582,104 @@
           "paint": { "price_unit": "gal", "search": { "good": "interior latex paint 1 gal", "better": "bathroom paint 1 gal", "best": "interior premium satin paint 1 gal" } },
           "baseboard": { "price_unit": "16 ft stick", "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" } },
           "cabinet_hardware": { "price_unit": "ea", "search": { "good": "cabinet pulls 10 pack", "better": "brushed nickel cabinet pull", "best": "solid brass cabinet pull" } }
+        }
+      }
+    },
+
+    "flooring_only": {
+      "id": "flooring_only",
+      "label": "Flooring Only",
+      "summary": "Quantified order list for a flooring-only job: the flooring material with layout waste, type-appropriate underlayment and setting materials (thinset + grout for tile, fasteners for nail-down wood), transition strips, and optional demolition / subfloor / trim add-ons.",
+
+      "inputs": [
+        { "name": "floorSqft", "type": "number", "required": true, "min": 1, "unit": "sqft",
+          "description": "Floor AREA to cover, in square feet. Drives every quantity." },
+        { "name": "flooringType", "type": "enum", "required": false, "default": "lvp",
+          "allowed": ["tile", "lvp", "laminate", "engineered", "hardwood"],
+          "description": "Flooring material. Sets the setting materials: tile -> thinset + grout + cement backer board; lvp/laminate -> foam underlayment; engineered/hardwood -> underlayment + fasteners." },
+        { "name": "tileLayout", "type": "enum", "required": false, "default": "straight",
+          "allowed": ["straight", "diagonal", "herringbone", "mosaic"],
+          "description": "Install layout - sets the waste %: straight 7%, diagonal 15%, herringbone 20%, mosaic 20%." },
+        { "name": "flooringBoxSqft", "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
+          "description": "Coverage per box/carton of your chosen flooring. When given, flooring is ordered in whole BOXES (pack_round) - and priced per box." },
+        { "name": "includeUnderlayment", "type": "boolean", "required": false, "default": true,
+          "description": "Include underlayment: cement backer board for tile, foam / moisture barrier for the other types." },
+        { "name": "includeTransitions", "type": "boolean", "required": false, "default": true,
+          "description": "Include transition strips at doorways (one per opening)." },
+        { "name": "openings", "type": "number", "required": false, "default": 2, "min": 0, "unit": "count",
+          "description": "Doorways / room openings - drives transition strips and shortens the baseboard run." },
+        { "name": "wallPerimeterLF", "type": "number", "required": false, "default": null, "unit": "LF",
+          "description": "Known room perimeter (used by the optional baseboard add-on). If omitted, estimated from roomShape." },
+        { "name": "roomShape", "type": "enum", "required": false, "default": "square",
+          "allowed": ["square", "rectangular", "galley", "l_shaped", "u_shaped"],
+          "description": "Room shape - refines the perimeter estimate used by the trim add-on. Ignored when wallPerimeterLF is given." },
+        { "name": "includeDemolition", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): floor tear-out debris -> dumpster count." },
+        { "name": "includeSubfloor", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): subfloor panels over the floor area." },
+        { "name": "includeTrim", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): baseboard trim around the perimeter, less door openings." }
+      ],
+
+      "geometry": {
+        "perimeter_model": "perimeter_factor[roomShape] * sqrt(floorSqft)",
+        "perimeter_factor_by_shape": { "square": 4.0, "rectangular": 4.1, "galley": 4.6, "l_shaped": 4.8, "u_shaped": 5.2 },
+        "perimeter_note": "Only used by the optional baseboard add-on; wallPerimeterLF overrides it."
+      },
+
+      "rates": {
+        "flooring": {
+          "waste_by_layout": { "straight": 0.07, "diagonal": 0.15, "herringbone": 0.20, "mosaic": 0.20 },
+          "labels": { "tile": "Floor tile", "lvp": "Luxury vinyl plank", "laminate": "Laminate flooring", "engineered": "Engineered wood flooring", "hardwood": "Hardwood flooring" },
+          "waste_note": "Top of each sourced waste band for the no-shortage promise. Order from ONE dye lot / batch."
+        },
+        "setting_by_type": {
+          "tile": ["thinset", "grout"],
+          "lvp": [],
+          "laminate": [],
+          "engineered": ["fasteners"],
+          "hardwood": ["fasteners"]
+        },
+        "underlayment_by_type": {
+          "tile":       { "key": "cement_backer_board", "label": "Cement backer board", "unit_sqft": 15, "waste_pct": 0.10, "order_unit": "sheet", "note": "1/4 in cement backer under floor tile, 3x5 sheets (15 sqft each)." },
+          "lvp":        { "key": "underlayment", "label": "Underlayment / moisture barrier", "unit_sqft": 100, "waste_pct": 0.05, "order_unit": "roll", "note": "Foam / moisture barrier roll (~100 sqft). Skip if your plank has an attached pad." },
+          "laminate":   { "key": "underlayment", "label": "Underlayment / moisture barrier", "unit_sqft": 100, "waste_pct": 0.05, "order_unit": "roll", "note": "Foam underlayment roll (~100 sqft)." },
+          "engineered": { "key": "underlayment", "label": "Underlayment / moisture barrier", "unit_sqft": 100, "waste_pct": 0.05, "order_unit": "roll", "note": "Foam / moisture barrier roll (~100 sqft)." },
+          "hardwood":   { "key": "underlayment", "label": "Rosin / felt underlayment", "unit_sqft": 100, "waste_pct": 0.05, "order_unit": "roll", "note": "Rosin paper or felt under nail-down hardwood." }
+        },
+        "thinset": { "coverage_sqft_per_bag": 75, "bag_lb": 50, "note": "~75 sqft per 50 lb bag at 1/4 x 1/4 trowel (conservative end so the order does not fall short)." },
+        "grout": { "coverage_sqft_per_bag": 100, "coverage_sqft_per_bag_small_tile": 50, "bag_lb": 25, "note": "~100 sqft per 25 lb bag for ~12in tile; mosaic / small tile roughly doubles usage." },
+        "fasteners": { "coverage_sqft_per_box": 500, "order_unit": "box", "note": "Cleats / staples for nail-down wood, ~500 sqft per box. Confirm the gauge your nailer takes." },
+        "transitions": { "order_unit": "ea", "note": "One transition strip per doorway / opening. Field-verify widths and the adjoining floor height." },
+        "addons": {
+          "demolition": { "debris_cy_per_sqft": 0.03, "dumpster_cy": 20, "dumpster_label": "20 cu yd dumpster", "note": "Floor tear-out only (~0.03 cu yd per sqft) - far less debris than a full room gut." },
+          "subfloor": { "sheet_sqft": 32, "waste_pct": 0.10, "note": "4x8 subfloor panels (32 sqft each) with 10% cutting waste." },
+          "trim": { "stick_lf": 16, "waste_pct": 0.10, "door_width_ft": 3, "note": "Baseboard by perimeter less ~3 ft per opening, +10% for miters / offcuts, sold in 16 ft sticks." }
+        }
+      },
+
+      "fixtures": { "plumbing": [], "electrical": [] },
+
+      "pricing": {
+        "tiers": ["good", "better", "best"],
+        "tier_labels": { "good": "Good - builder grade", "better": "Better - mid-grade", "best": "Best - premium" },
+        "defaults": { "tier": "better", "markup_pct": 20, "labor_pct_of_materials": 60 },
+        "labor": { "basis": "pct_of_materials", "default_pct": 60, "note": "A flooring install is less labor-heavy relative to materials than a full remodel - default 60% of materials. Override per job with laborPct or laborCost." },
+        "lines": {
+          "flooring_tile":       { "price_unit": "sqft", "search": { "good": "ceramic floor tile", "better": "porcelain floor tile", "best": "porcelain wood look plank tile" } },
+          "flooring_lvp":        { "price_unit": "sqft", "search": { "good": "luxury vinyl plank flooring", "better": "waterproof luxury vinyl plank flooring", "best": "rigid core luxury vinyl plank flooring" } },
+          "flooring_laminate":   { "price_unit": "sqft", "search": { "good": "laminate flooring", "better": "water resistant laminate flooring", "best": "premium laminate flooring" } },
+          "flooring_engineered": { "price_unit": "sqft", "search": { "good": "engineered hardwood flooring", "better": "engineered oak flooring", "best": "wide plank engineered hardwood flooring" } },
+          "flooring_hardwood":   { "price_unit": "sqft", "search": { "good": "solid oak hardwood flooring", "better": "solid hardwood flooring", "best": "wide plank solid hardwood flooring" } },
+          "cement_backer_board": { "price_unit": "sheet", "search": { "good": "1/4 in cement backer board 3x5", "better": "1/4 in cement board 3x5", "best": "1/4 in fiber cement backer board" } },
+          "underlayment":        { "price_unit": "roll", "search": { "good": "foam flooring underlayment roll", "better": "moisture barrier flooring underlayment", "best": "premium acoustic flooring underlayment" } },
+          "thinset":             { "price_unit": "50 lb bag", "search": { "good": "thinset mortar 50 lb", "better": "modified thinset mortar 50 lb", "best": "premium large format thinset mortar 50 lb" } },
+          "grout":               { "price_unit": "25 lb bag", "search": { "good": "sanded grout 25 lb", "better": "stain resistant sanded grout 25 lb", "best": "epoxy grout" } },
+          "fasteners":           { "price_unit": "box", "search": { "good": "flooring cleats 2 in", "better": "hardwood flooring staples 2 in", "best": "stainless flooring cleats" } },
+          "transitions":         { "price_unit": "ea", "search": { "good": "vinyl transition strip", "better": "wood floor transition strip", "best": "aluminum floor transition strip" } },
+          "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" }, "note": "Haul-away pricing varies by locality - rough placeholder; use a local quote." },
+          "subfloor":            { "price_unit": "sheet", "search": { "good": "7/16 in osb sheathing 4x8", "better": "23/32 in plywood subfloor 4x8", "best": "3/4 in tongue and groove plywood subfloor" } },
+          "baseboard":           { "price_unit": "16 ft stick", "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" } }
         }
       }
     }

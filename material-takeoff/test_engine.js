@@ -103,7 +103,7 @@ console.log('\n========================================');
 console.log('PROJECT TYPES CONTRACT (drives the dynamic form)');
 console.log('========================================');
 const types = getProjectTypes(ds);
-check('two project types (kitchen + bathroom)', types.length === 2);
+check('three project types (kitchen + bathroom + flooring)', types.length === 3);
 check('kitchen_remodel present', types.some(t => t.id === 'kitchen_remodel'));
 check('bathroom_remodel present', types.some(t => t.id === 'bathroom_remodel'));
 check('it is kitchen_remodel (first)', types[0].id === 'kitchen_remodel');

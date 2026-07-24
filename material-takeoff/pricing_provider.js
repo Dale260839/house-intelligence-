@@ -217,6 +217,15 @@ const MOCK_UNIT_PRICES = {
   paint:                  { good: 24,  better: 38,  best: 62  },  // per gal
   baseboard:              { good: 9,   better: 14,  best: 26  },  // per 16 ft stick
   cabinet_hardware:       { good: 2,   better: 5,   best: 12  },  // per pull
+  // flooring_only lines (Phase 5)
+  flooring_tile:          { good: 2,   better: 4,   best: 9   },  // per sqft
+  flooring_lvp:           { good: 2,   better: 4,   best: 7   },  // per sqft
+  flooring_laminate:      { good: 1,   better: 3,   best: 5   },  // per sqft
+  flooring_engineered:    { good: 4,   better: 7,   best: 12  },  // per sqft
+  flooring_hardwood:      { good: 5,   better: 9,   best: 15  },  // per sqft
+  underlayment:           { good: 20,  better: 35,  best: 60  },  // per roll
+  fasteners:              { good: 28,  better: 42,  best: 65  },  // per box
+  transitions:            { good: 12,  better: 22,  best: 38  },  // per strip
 };
 
 function createMockPricingProvider(opts = {}) {

@@ -23,8 +23,8 @@ repo). Called server-to-server by BuildSuite. **US-only.**
 
 | Capability | Status | Detail |
 |---|---|---|
-| **Quantities** | ✅ Live | Both project types, stable |
-| **Project types** | ✅ **2 live** | `kitchen_remodel`, `bathroom_remodel` |
+| **Quantities** | ✅ Live | All three project types, stable |
+| **Project types** | ✅ **3 live** | `kitchen_remodel`, `bathroom_remodel`, `flooring_only` |
 | **Room-shape accuracy** | ✅ Live | `roomShape` shape-aware perimeter |
 | **Pack-size rounding** | ✅ Live | tile → boxes, countertop/vanity top → slabs |
 | **Live pricing** | ✅ **Live via SerpApi** | Verified 11/11 lines priced with real HD products |
@@ -32,18 +32,12 @@ repo). Called server-to-server by BuildSuite. **US-only.**
 | **Add-on groups** (Phase 4) | ✅ **Live** | demolition, subfloor, paint, trim, hardware — verified in prod (17-line kitchen) |
 | Auth / persistence | ❌ Not yet | Roadmap Phase 7 (before billing) |
 
-**Verified live in prod (2026-07-16):** `project-types` → 2 types · kitchen 200 sqft → 11 lines ·
+**Verified live in prod (2026-07-16):** `project-types` → 3 types · kitchen 200 sqft → 11 lines ·
 all 5 add-ons on → **17 lines** · `floorTileBoxSqft=15.5` → `pack_round` **14 box** ·
 `roomShape=galley` → 65.1 LF perimeter / 18 sheets · priced 11/11 via SerpApi · 429 + `X-RateLimit-*`
 headers present.
 
-### Uncommitted local files
-| File | What it is |
-|---|---|
-| `material-takeoff/buildsuite-demo.html` | Single-file BuildSuite integration demo (see §11). Not pushed. |
-
-Everything else is committed and pushed — `main` is in sync with `origin/main`
-(latest: `ec30e3e` Phase 4 add-on line groups).
+**Everything is committed and pushed** — `main` is in sync with `origin/main`. Nothing local-only.
 
 ---
 
@@ -86,6 +80,22 @@ for pricing. Full contract: `material-takeoff/API_GUIDE.md`.
 - **Scope toggles (all on by default):** `showerType:"none"` drops surround tile + waterproofing +
   backer board; `includeVanity:false`; `includeWaterproofing:false`; `floorTile:false`.
 
+### 4.3 `flooring_only`
+- **Required:** `floorSqft`.
+- **Optional:** `flooringType` (`tile`/`lvp`/`laminate`/`engineered`/`hardwood`, default `lvp`),
+  `tileLayout`, `flooringBoxSqft`, `includeUnderlayment`, `includeTransitions`, `openings`,
+  `roomShape`, `wallPerimeterLF`, `includeDemolition`, `includeSubfloor`, `includeTrim`.
+- **Lines are driven by `flooringType`:**
+
+  | Type | Flooring line | Also ordered |
+  |---|---|---|
+  | `tile` | `flooring_tile` | cement backer board + thinset + grout |
+  | `lvp` / `laminate` | `flooring_lvp` / `flooring_laminate` | foam / moisture-barrier underlayment |
+  | `engineered` / `hardwood` | `flooring_engineered` / `flooring_hardwood` | underlayment + fasteners (nail-down) |
+
+  Plus `transitions` (one per doorway). **No plumbing/electrical rough-in** — `fixtures_checklist`
+  is empty for this type. **Labor defaults to 60%** of materials (vs 100% for full remodels).
+
 ---
 
 ## 5. Material line types
@@ -116,7 +126,8 @@ per box/slab** (this is what fixes the per-case tile pricing over-count).
 **Per-surface tile layouts** — floor vs backsplash/wall can differ; grout drops to small-tile coverage
 if either is `mosaic`.
 
-**Add-on groups (Phase 4)** — five optional scope groups on both types, each **off by default**:
+**Add-on groups (Phase 4)** — optional scope groups, each **off by default**. Kitchen/bathroom get all
+five; `flooring_only` gets demolition, subfloor and trim (paint/hardware do not apply to a floor):
 
 | Toggle | Adds | Derivation |
 |---|---|---|
@@ -174,8 +185,8 @@ rate_limiter.js · server.js · smoke_pricing.js
 
 `builders/addons.js` holds the five shared add-on groups, so any new project type gets them for free.
 
-**Tests — 298 passing** (`npm test`): 59 engine + 46 bathroom + 19 room-shape + 23 pack-size +
-29 add-ons + 61 pricing + 24 rate-limit + 37 server.
+**Tests — 351 passing** (`npm test`): 59 engine + 46 bathroom + 19 room-shape + 23 pack-size +
+29 add-ons + 53 flooring + 61 pricing + 24 rate-limit + 37 server.
 
 **Recent commits:** `f9981e5` KBs · `fed4e87` Phases 0–3 (builders, bathroom, room shapes, pack sizes)
 · `ddd09ed` docs · `fe380b8` rate limiting · `ab947b7` parallel pricing · `cb73d62` pricing layer.
@@ -185,11 +196,10 @@ rate_limiter.js · server.js · smoke_pricing.js
 ## 10. Roadmap (remaining)
 
 Detail + estimates in `MATERIAL_TAKEOFF_PLAN.md`. **Done & deployed:** Phase 0 (pluggable builders),
-1 (bathroom type), 2 (room shapes), 3 (pack sizes + per-surface tile), **4 (add-on groups)**.
+1 (bathroom type), 2 (room shapes), 3 (pack sizes + per-surface tile), 4 (add-on groups), **5 (flooring_only type)**.
 
 | Phase | Item | Effort |
 |---|---|---|
-| **5** | `flooring_only` project type | 2 d |
 | **6** | Drywall scope modes (full / patch / none) | 1 d |
 | **7** | **Auth + persistence** (rate limiting ✅ done) — required before billing | 3–5 d |
 | **8** | Region/era-aware rough-in (tie into House Intelligence) | 2–3 d |
