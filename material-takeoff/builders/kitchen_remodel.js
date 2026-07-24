@@ -10,6 +10,7 @@ const {
   round1, isPosNum, ceil,
   madeToMeasureLine, wasteFactorLine, coverageLine, buildFixtures,
 } = require('../line_builders.js');
+const { buildAddonLines } = require('./addons.js');
 
 function build(v, def) {
   const g = def.geometry;
@@ -118,6 +119,16 @@ function build(v, def) {
       r.drywall_screws.per_box, 'screws/box', '1 lb box',
       `${sheets} sheets x ${r.drywall_screws.per_sheet} screws/sheet`, r.drywall_screws.note));
   }
+
+  // ── optional add-on groups (demolition, subfloor, paint, trim, hardware) ──
+  // All off by default; each is switched on by its own include* input.
+  materials.push(...buildAddonLines(v, r.addons, {
+    floorSqft: v.kitchenSqft,
+    paintArea: wallArea,
+    perimeter,
+    hardwareLF: baseLF + upperLF,
+    openings: v.openings,
+  }));
 
   // ── fixtures / rough-in checklist ──
   const fixtures_checklist = buildFixtures(def.fixtures, { base_lf: baseLF, upper_lf: upperLF });

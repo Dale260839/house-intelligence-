@@ -15,6 +15,7 @@ const {
   round1, isPosNum, ceil,
   madeToMeasureLine, wasteFactorLine, coverageLine, buildFixtures,
 } = require('../line_builders.js');
+const { buildAddonLines } = require('./addons.js');
 
 function build(v, def) {
   const g = def.geometry;
@@ -129,6 +130,16 @@ function build(v, def) {
       `${r.vanity_top.sqft_per_lf} sqft per vanity LF (${round1(vanityLF)} LF)`,
       { wholeUnits: true, fieldVerify: true, note: r.vanity_top.note, pack: vtPack }));
   }
+
+  // ── optional add-on groups (demolition, subfloor, paint, trim, hardware) ──
+  // All off by default. Paint covers the DRY walls only — the wet zone is tiled.
+  materials.push(...buildAddonLines(v, r.addons, {
+    floorSqft: v.bathroomSqft,
+    paintArea: dryWallArea,
+    perimeter,
+    hardwareLF: vanityLF,
+    openings: v.openings,
+  }));
 
   // ── fixtures / rough-in checklist ──
   const fixtures_checklist = buildFixtures(def.fixtures, { vanity_lf: vanityLF });

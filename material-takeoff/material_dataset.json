@@ -174,6 +174,30 @@
           "name": "countertopSlabSqft",
           "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
           "description": "Usable area per countertop SLAB. When given, countertop is ordered in whole SLABS (pack_round) instead of sqft."
+        },
+        {
+          "name": "includeDemolition", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): demolition debris volume -> dumpster count."
+        },
+        {
+          "name": "includeSubfloor", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): subfloor / underlayment panels over the floor area."
+        },
+        {
+          "name": "includePaint", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): primer + topcoat paint over the drywall surface."
+        },
+        {
+          "name": "includeTrim", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): baseboard trim around the perimeter, less door openings."
+        },
+        {
+          "name": "includeHardware", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): cabinet pulls / knobs, derived from cabinet linear feet."
+        },
+        {
+          "name": "paintCoats", "type": "number", "required": false, "default": 2, "min": 1, "unit": "count",
+          "description": "Number of topcoats when includePaint is on (primer is always 1 coat)."
         }
       ],
 
@@ -245,6 +269,35 @@
           "per_sheet": 32,
           "per_box": 350,
           "note": "~32 screws per 4x8 sheet (16in field / 8-12in edges). A 1 lb box of 1-1/4in coarse screws holds ~350."
+        },
+        "addons": {
+          "demolition": {
+            "debris_cy_per_sqft": 0.08,
+            "dumpster_cy": 20,
+            "dumpster_label": "20 cu yd dumpster",
+            "note": "Debris volume estimate for a full gut (~0.08 cu yd per sqft of floor). Ordered as dumpsters; confirm local haul limits and weight caps."
+          },
+          "subfloor": {
+            "sheet_sqft": 32,
+            "waste_pct": 0.10,
+            "note": "4x8 underlayment / subfloor panels (32 sqft each) with 10% cutting waste."
+          },
+          "paint": {
+            "coverage_sqft_per_gal": 350,
+            "primer_coats": 1,
+            "default_topcoats": 2,
+            "note": "~350 sqft per gallon per coat. Primer 1 coat + topcoats (default 2), applied to the drywall surface area."
+          },
+          "trim": {
+            "stick_lf": 16,
+            "waste_pct": 0.10,
+            "door_width_ft": 3,
+            "note": "Baseboard by perimeter less ~3 ft per opening, +10% for miters/offcuts, sold in 16 ft sticks."
+          },
+          "hardware": {
+            "pulls_per_cabinet_lf": 0.9,
+            "note": "~0.9 pulls/knobs per cabinet LF (mix of doors and drawer banks). Field-verify the actual door/drawer count."
+          }
         }
       },
 
@@ -332,6 +385,31 @@
           "drywall_screws": {
             "price_unit": "1 lb box",
             "search": { "good": "1-1/4 in coarse drywall screws 1 lb", "better": "1-1/4 in coarse drywall screws 5 lb", "best": "1-1/4 in fine drywall screws collated" }
+          },
+          "demolition_dumpster": {
+            "price_unit": "dumpster", "field_estimate": true,
+            "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" },
+            "note": "Dumpster/haul-away pricing varies hugely by locality - treat as a rough placeholder and use a local quote."
+          },
+          "subfloor": {
+            "price_unit": "sheet",
+            "search": { "good": "7/16 in osb sheathing 4x8", "better": "23/32 in plywood subfloor 4x8", "best": "3/4 in tongue and groove plywood subfloor" }
+          },
+          "primer": {
+            "price_unit": "gal",
+            "search": { "good": "interior primer 1 gal", "better": "interior stain blocking primer 1 gal", "best": "interior bonding primer 1 gal" }
+          },
+          "paint": {
+            "price_unit": "gal",
+            "search": { "good": "interior latex paint 1 gal", "better": "interior eggshell paint 1 gal", "best": "interior premium satin paint 1 gal" }
+          },
+          "baseboard": {
+            "price_unit": "16 ft stick",
+            "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" }
+          },
+          "cabinet_hardware": {
+            "price_unit": "ea",
+            "search": { "good": "cabinet pulls 10 pack", "better": "brushed nickel cabinet pull", "best": "solid brass cabinet pull" }
           }
         }
       }
@@ -388,7 +466,19 @@
         { "name": "wallTileBoxSqft", "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
           "description": "Coverage per box of your WALL tile. When given, wall tile is ordered in whole BOXES - and priced per box." },
         { "name": "vanityTopSlabSqft", "type": "number", "required": false, "default": null, "min": 0, "unit": "sqft",
-          "description": "Usable area per vanity-top SLAB. When given, the vanity top is ordered in whole SLABS (pack_round) instead of sqft." }
+          "description": "Usable area per vanity-top SLAB. When given, the vanity top is ordered in whole SLABS (pack_round) instead of sqft." },
+        { "name": "includeDemolition", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): demolition debris volume -> dumpster count." },
+        { "name": "includeSubfloor", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): subfloor / underlayment panels over the floor area." },
+        { "name": "includePaint", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): primer + topcoat paint over the DRY wall area (tiled wet zone excluded)." },
+        { "name": "includeTrim", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): baseboard trim around the perimeter, less door openings." },
+        { "name": "includeHardware", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): vanity pulls / knobs, derived from vanity linear feet." },
+        { "name": "paintCoats", "type": "number", "required": false, "default": 2, "min": 1, "unit": "count",
+          "description": "Number of topcoats when includePaint is on (primer is always 1 coat)." }
       ],
 
       "geometry": {
@@ -416,7 +506,36 @@
         "drywall_tape": { "sqft_per_lf": 2, "roll_lf": 250, "note": "Tape ~2 sqft per LF; 250 ft rolls." },
         "drywall_screws": { "per_sheet": 32, "per_box": 350, "note": "~32 screws per 4x8 sheet; ~350 per 1 lb box." },
         "vanity": { "made_to_measure": true, "note": "Linear feet, made-to-measure -> NO waste factor. Field-verify before ordering." },
-        "vanity_top": { "sqft_per_lf": 1.8, "waste_pct_solid": 0.15, "waste_pct_veined": 0.25, "note": "~1.8 sqft per vanity LF (22in deep). Slab order adds 15% (solid) to 25% (veined) cutting waste. Field-verify." }
+        "vanity_top": { "sqft_per_lf": 1.8, "waste_pct_solid": 0.15, "waste_pct_veined": 0.25, "note": "~1.8 sqft per vanity LF (22in deep). Slab order adds 15% (solid) to 25% (veined) cutting waste. Field-verify." },
+        "addons": {
+          "demolition": {
+            "debris_cy_per_sqft": 0.12,
+            "dumpster_cy": 20,
+            "dumpster_label": "20 cu yd dumpster",
+            "note": "Bathrooms produce more debris per sqft than kitchens (tile, tub, substrate) - ~0.12 cu yd per sqft. Confirm local haul/weight limits."
+          },
+          "subfloor": {
+            "sheet_sqft": 32,
+            "waste_pct": 0.10,
+            "note": "4x8 underlayment / subfloor panels (32 sqft each) with 10% cutting waste."
+          },
+          "paint": {
+            "coverage_sqft_per_gal": 350,
+            "primer_coats": 1,
+            "default_topcoats": 2,
+            "note": "~350 sqft per gallon per coat, applied to the DRY wall area only (the tiled wet zone is excluded). Use a bathroom/moisture-rated paint."
+          },
+          "trim": {
+            "stick_lf": 16,
+            "waste_pct": 0.10,
+            "door_width_ft": 3,
+            "note": "Baseboard by perimeter less ~3 ft per opening, +10% for miters/offcuts, sold in 16 ft sticks."
+          },
+          "hardware": {
+            "pulls_per_cabinet_lf": 0.9,
+            "note": "~0.9 pulls/knobs per vanity LF. Field-verify the actual door/drawer count."
+          }
+        }
       },
 
       "fixtures": {
@@ -456,7 +575,13 @@
           "drywall_tape": { "price_unit": "250 ft roll", "search": { "good": "paper drywall joint tape 250 ft", "better": "self adhesive mesh drywall tape", "best": "paper drywall joint tape 500 ft" } },
           "drywall_screws": { "price_unit": "1 lb box", "search": { "good": "1-1/4 in coarse drywall screws 1 lb", "better": "1-1/4 in coarse drywall screws 5 lb", "best": "1-1/4 in fine drywall screws collated" } },
           "vanity": { "price_unit": "LF", "field_estimate": true, "search": { "good": "single sink bathroom vanity", "better": "shaker bathroom vanity with top", "best": "solid wood bathroom vanity soft close" } },
-          "vanity_top": { "price_unit": "sqft", "field_estimate": true, "search": { "good": "cultured marble vanity top", "better": "quartz vanity top", "best": "granite vanity top" } }
+          "vanity_top": { "price_unit": "sqft", "field_estimate": true, "search": { "good": "cultured marble vanity top", "better": "quartz vanity top", "best": "granite vanity top" } },
+          "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" }, "note": "Dumpster/haul-away pricing varies hugely by locality - rough placeholder; use a local quote." },
+          "subfloor": { "price_unit": "sheet", "search": { "good": "7/16 in osb sheathing 4x8", "better": "23/32 in plywood subfloor 4x8", "best": "cement board underlayment 4x8" } },
+          "primer": { "price_unit": "gal", "search": { "good": "interior primer 1 gal", "better": "interior stain blocking primer 1 gal", "best": "interior bonding primer 1 gal" } },
+          "paint": { "price_unit": "gal", "search": { "good": "interior latex paint 1 gal", "better": "bathroom paint 1 gal", "best": "interior premium satin paint 1 gal" } },
+          "baseboard": { "price_unit": "16 ft stick", "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" } },
+          "cabinet_hardware": { "price_unit": "ea", "search": { "good": "cabinet pulls 10 pack", "better": "brushed nickel cabinet pull", "best": "solid brass cabinet pull" } }
         }
       }
     }

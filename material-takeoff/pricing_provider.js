@@ -210,6 +210,13 @@ const MOCK_UNIT_PRICES = {
   cement_backer_board:    { good: 12,  better: 15,  best: 20  },  // per sheet
   vanity:                 { good: 180, better: 320, best: 600 },  // per LF (rough budget)
   vanity_top:             { good: 25,  better: 55,  best: 95  },  // per sqft
+  // add-on groups (Phase 4) — all optional, off unless toggled on
+  demolition_dumpster:    { good: 130, better: 160, best: 200 },  // per dumpster / bag
+  subfloor:               { good: 18,  better: 32,  best: 45  },  // per sheet
+  primer:                 { good: 18,  better: 26,  best: 38  },  // per gal
+  paint:                  { good: 24,  better: 38,  best: 62  },  // per gal
+  baseboard:              { good: 9,   better: 14,  best: 26  },  // per 16 ft stick
+  cabinet_hardware:       { good: 2,   better: 5,   best: 12  },  // per pull
 };
 
 function createMockPricingProvider(opts = {}) {

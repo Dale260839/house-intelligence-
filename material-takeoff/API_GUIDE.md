@@ -120,6 +120,8 @@ built-in types are documented below.
 | `floorTileLayout` · `backsplashTileLayout` | enum | *falls back to `tileLayout`* | Per-surface tile layout (`straight`/`diagonal`/`herringbone`/`mosaic`) so floor and backsplash can differ. |
 | `floorTileBoxSqft` · `backsplashTileBoxSqft` | number (sqft) | — | Coverage per box of your tile. When given, that tile is ordered in whole **boxes** (`pack_round` line) and **priced per box**. |
 | `countertopSlabSqft` | number (sqft) | — | Usable area per slab. When given, countertop is ordered in whole **slabs**. |
+| `includeDemolition` · `includeSubfloor` · `includePaint` · `includeTrim` · `includeHardware` | boolean | `false` | **Add-on groups (§3.D)** — each adds its own material line(s). All off by default. |
+| `paintCoats` | number | `2` | Topcoats when `includePaint` is on (primer is always 1 coat). |
 
 > **Pass the known-measurement overrides whenever you have them** (`cabinetLF`, `countertopSqft`,
 > `wallPerimeterLF`). Defaults are scoping estimates from a square-room model; real measurements make
@@ -156,6 +158,8 @@ built-in types are documented below.
 | `floorTileLayout` · `wallTileLayout` | enum | *falls back to `tileLayout`* | Per-surface tile layout so the floor and the shower/wall surround can differ. |
 | `floorTileBoxSqft` · `wallTileBoxSqft` | number (sqft) | — | Box coverage; when given, that tile is ordered in whole **boxes** (`pack_round`) and **priced per box**. |
 | `vanityTopSlabSqft` | number (sqft) | — | Usable area per slab; when given, the vanity top is ordered in whole **slabs**. |
+| `includeDemolition` · `includeSubfloor` · `includePaint` · `includeTrim` · `includeHardware` | boolean | `false` | **Add-on groups (§3.D)** — all off by default. Paint covers the **dry** walls only (the wet zone is tiled). |
+| `paintCoats` | number | `2` | Topcoats when `includePaint` is on. |
 
 > Bathroom material lines: floor tile, **wall tile** (shower/tub surround + wainscot), thinset, grout,
 > **waterproofing membrane**, **cement backer board** (wet walls), drywall (dry walls) + compound/tape/
@@ -177,6 +181,25 @@ built-in types are documented below.
 | `markupPct` | number (%) | `20` | Markup on total cost: `price = cost × (1 + markupPct/100)`. |
 | `laborPct` | number (%) | `100` | Labor as a **percent of material cost**. Default 1:1 is a rough rule of thumb — override per job. |
 | `laborCost` | number ($) | — | Explicit labor dollars. **Overrides `laborPct`** when given. |
+
+### D. Add-on groups (opt-in — extra scope beyond the core material list)
+
+Each toggle adds its own material line(s) to `materials`. **All default to `false`**, so turning none
+on gives exactly the same takeoff as before. Available on **both** project types.
+
+| Toggle | Adds line(s) | How it's derived |
+|---|---|---|
+| `includeDemolition` | `demolition_dumpster` | floor area × debris rate (kitchen 0.08, bathroom 0.12 cu yd/sqft) → whole dumpsters |
+| `includeSubfloor` | `subfloor` | floor area +10% waste → 4×8 panels |
+| `includePaint` | `primer` + `paint` | drywall surface × coats ÷ ~350 sqft per gal (bathroom: **dry walls only**); `paintCoats` sets topcoats (default 2) |
+| `includeTrim` | `baseboard` | perimeter − 3 ft per opening, +10% → 16 ft sticks |
+| `includeHardware` | `cabinet_hardware` | cabinet LF (kitchen) / vanity LF (bathroom) × 0.9 pulls per LF |
+
+Add-on lines carry the same `raw` / `order_qty` / `basis` fields as core lines and are **priced** like
+any other line when `price=true`.
+
+> Dumpster/haul-away pricing varies hugely by locality — treat `demolition_dumpster` cost as a rough
+> placeholder and use a local quote.
 
 ---
 
@@ -491,8 +514,9 @@ curl -i -X POST https://house-intelligence-production-f7f6.up.railway.app/materi
 9. **The rough-in checklist is a checklist, not a code-compliance tool.** It uses NEC/standard
    rules of thumb; actual permits and local code vary. Romex footage is a rough estimate, and the
    range circuit assumes electric (gas not yet an input).
-10. **Materials scope is limited to the listed categories.** No demolition, subfloor, paint, trim,
-    hardware, appliances, permits, or labor.
+10. **Extra scope is opt-in (§3.D).** Demolition, subfloor, paint, trim and hardware are available as
+    add-on groups but default to **off** — turn them on per job. Still **not** covered: appliances,
+    permits, and labor as line items (labor appears only as a rough % in the pricing profit layout).
 11. **Drywall assumes a full re-rock** of walls (perimeter × height − openings). Patch-only jobs
     will be over-estimated — use `wallPerimeterLF`/`includeCeiling` to tune.
 12. **No auth or persistence yet** (rate limiting IS in place — per-client IP, HTTP 429 over the
@@ -534,7 +558,7 @@ not a substitute for field measurement.
 
 ---
 
-_Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 61 pricing +
-24 rate-limit + 37 HTTP tests = 269). Standards are sourced in `material_dataset.json` `_meta`. House
-Intelligence is untouched — separate service, shared repo._
+_Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 29 add-ons +
+61 pricing + 24 rate-limit + 37 HTTP tests = 298). Standards are sourced in `material_dataset.json`
+`_meta`. House Intelligence is untouched — separate service, shared repo._
 
