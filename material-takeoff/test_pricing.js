@@ -139,6 +139,24 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   check('extractProduct: BigBox search_results[].product', extractProduct({ search_results: [{ product: { title: 'B', price: 9.99 } }] }).price === 9.99);
   check('extractProduct: flat product', extractProduct({ product: { title: 'C', price: '$3' } }).price === 3);
   check('extractProduct: nothing usable -> null', extractProduct({ foo: 'bar' }) === null);
+
+  // Outlier guard: bulk/pallet SKUs sometimes rank first. Real case that shipped a $580k
+  // quote: a "cement backer board" search returned a $19,275 pallet before the $15 sheet.
+  const withPallet = { products: [
+    { title: 'Cement Backerboard PALLET', price: 19275 },
+    { title: 'Cement Backerboard 3x5', price: 15.48 },
+    { title: 'Cement Backerboard 3x5 alt', price: 16.98 },
+    { title: 'Backer board 4x8', price: 22.10 },
+  ] };
+  check('outlier guard skips a pallet SKU listed first', extractProduct(withPallet).price === 15.48);
+  check('  and keeps its title/url aligned to the picked product', /3x5/.test(extractProduct(withPallet).title));
+  check('normal first result is still chosen (no false positives)',
+    extractProduct({ products: [{ title: 'A', price: 17.98 }, { title: 'B', price: 21.98 }] }).price === 17.98);
+  check('explicit maxPrice caps too', extractProduct({ products: [
+    { title: 'pricey', price: 90 }, { title: 'ok', price: 40 }] }, { maxPrice: 50 }).price === 40);
+  check('all-outlier / single result -> cheapest, never a pallet',
+    extractProduct({ products: [{ title: 'only', price: 19275 }] }).price === 19275);
+  check('outlierFactor is tunable', extractProduct(withPallet, { outlierFactor: 2000 }).price === 19275);
   check('extractProduct normalizes apionline -> www.homedepot.com', extractProduct({ products: [{ title: 'T', price: 5, link: 'https://apionline.homedepot.com/p/x/123' }] }).url === 'https://www.homedepot.com/p/x/123');
 
   const url = buildSearchUrl('', 'SECRET', 'thinset mortar 50 lb');

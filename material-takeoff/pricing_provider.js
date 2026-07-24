@@ -89,7 +89,15 @@ function normalizeProductUrl(url) {
 // Pull the first usable product { title, url, price } out of whatever the service
 // returned. Covers SerpApi (home_depot: `products`/`product_results`), BigBox
 // (`search_results[i].product`), and a flat `{ price, title, link }`.
-function extractProduct(json) {
+// OUTLIER GUARD (important): retailers list bulk/pallet SKUs alongside single units and
+// they sometimes rank FIRST — a real "cement backer board" search returned a $19,275
+// pallet ahead of the $15 sheet, which turned a 400 sqft floor into a $580k quote. So
+// rather than blindly taking the first priced result, compare against the MEDIAN price of
+// the result set and skip anything wildly above it. Self-tuning (no per-line price tables
+// to maintain); opts.maxPrice adds an optional hard ceiling on top.
+//   opts.maxPrice      — absolute ceiling for a unit price
+//   opts.outlierFactor — multiple of the median to allow (default 12)
+function extractProduct(json, opts = {}) {
   if (!json || typeof json !== 'object') return null;
 
   const candidates =
@@ -100,18 +108,30 @@ function extractProduct(json) {
     (json.product ? [json.product] : null) ||
     [json];
 
+  const priced = [];
   for (const c of candidates) {
     if (!c) continue;
     const price = parsePrice(c.price ?? c.current_price ?? c.pricing);
-    if (price != null) {
-      return {
-        price,
-        title: c.title || c.name || c.product_title || null,
-        url: normalizeProductUrl(c.link || c.url || c.product_url || c.offer_url || null),
-      };
-    }
+    if (price != null) priced.push({ c, price });
   }
-  return null;
+  if (!priced.length) return null;
+
+  // Median of everything the search returned = a robust "what does this cost?" signal.
+  const sorted = priced.map(x => x.price).slice().sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+  let cap = median * (opts.outlierFactor || 12);
+  if (opts.maxPrice > 0) cap = Math.min(cap, opts.maxPrice);
+
+  // First non-outlier; if everything is an outlier (e.g. a single-result search) fall
+  // back to the cheapest — a unit price beats a pallet price.
+  const pick = priced.find(x => x.price <= cap)
+            || priced.slice().sort((a, b) => a.price - b.price)[0];
+  const c = pick.c;
+  return {
+    price: pick.price,
+    title: c.title || c.name || c.product_title || null,
+    url: normalizeProductUrl(c.link || c.url || c.product_url || c.offer_url || null),
+  };
 }
 
 /**
@@ -152,7 +172,7 @@ function createHomeDepotProvider(opts = {}) {
   return {
     id: 'homedepot_live',
     source: 'homedepot_live',
-    async lookup({ query }) {
+    async lookup({ query, maxPrice }) {
       if (!query) return { ok: false, reason: 'no_search_term' };
       if (cache.has(query)) return cache.get(query);
 
@@ -172,7 +192,7 @@ function createHomeDepotProvider(opts = {}) {
         } else {
           let json;
           try { json = await res.json(); } catch { json = null; }
-          const product = extractProduct(json);
+          const product = extractProduct(json, { maxPrice });
           result = product
             ? { ok: true, unit_price: product.price, currency: 'USD',
                 product_title: product.title, product_url: product.url, source: 'homedepot_live' }

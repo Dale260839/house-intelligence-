@@ -113,7 +113,8 @@ async function priceTakeoff(takeoff, opts = {}) {
     };
     if (!cfg || !query) return { ...base, priced: false, reason: 'no_pricing_config' };
 
-    const res = await provider.lookup({ key: m.key, query, tier, priceUnit: base.price_unit });
+    const res = await provider.lookup({ key: m.key, query, tier, priceUnit: base.price_unit,
+      maxPrice: cfg.max_unit_price });
     if (!res || !res.ok) return { ...base, priced: false, reason: (res && res.reason) || 'lookup_failed', query };
 
     return {
