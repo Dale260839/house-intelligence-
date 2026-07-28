@@ -6,6 +6,7 @@
  */
 const http = require('http');
 const { server, RATE_LIMITER } = require('./server.js');
+const { renderTakeoffHtml } = require('./pdf_export.js');
 
 let pass = 0, fail = 0;
 function check(name, cond) { console.log((cond ? 'PASS' : 'FAIL') + ' ' + name); cond ? pass++ : fail++; }
@@ -128,6 +129,65 @@ function request(port, method, path, body) {
     delete process.env.PRICING_MOCK;
     const noProv = await request(port, 'POST', '/material-takeoff', { projectType: 'kitchen_remodel', kitchenSqft: 200, price: true });
     check('price=true, no provider -> 200, pricing ok:false pricing_unavailable', noProv.status === 200 && noProv.json.ok === true && noProv.json.pricing.ok === false && noProv.json.pricing.reason === 'pricing_unavailable');
+
+    // ── v2 multi-section scope (POST /material-takeoff/from-scope) ─────────
+    const scopeSingle = await request(port, 'POST', '/material-takeoff/from-scope',
+      { sections: [{ project_type: 'kitchen_remodel', inputs: { kitchenSqft: 200 } }] });
+    check('POST /from-scope single -> 200 ok', scopeSingle.status === 200 && scopeSingle.json.ok === true);
+    check('  -> source_type "scope", project_type = the single type', scopeSingle.json.source_type === 'scope' && scopeSingle.json.project_type === 'kitchen_remodel');
+    check('  -> every material line carries section_id', scopeSingle.json.materials.every(m => m.section_id));
+    check('  -> internal section_takeoffs NOT leaked to the client', scopeSingle.json.section_takeoffs === undefined);
+
+    const scopeComposite = await request(port, 'POST', '/material-takeoff/from-scope', { sections: [
+      { label: 'Kitchen', project_type: 'kitchen_remodel', inputs: { kitchenSqft: 200 } },
+      { label: 'Bath', project_type: 'bathroom_remodel', inputs: { bathroomSqft: 60 } },
+    ] });
+    check('POST /from-scope composite -> project_type "composite", 2 sections', scopeComposite.status === 200 && scopeComposite.json.project_type === 'composite' && scopeComposite.json.sections.length === 2);
+    check('  -> lines tagged with both section ids', scopeComposite.json.materials.some(m => m.section_id === 'kitchen') && scopeComposite.json.materials.some(m => m.section_id === 'bath'));
+
+    const scopeBad = await request(port, 'POST', '/material-takeoff/from-scope', { sections: [] });
+    check('POST /from-scope empty sections -> 400', scopeBad.status === 400 && scopeBad.json.ok === false);
+
+    process.env.PRICING_MOCK = '1';
+    const scopePriced = await request(port, 'POST', '/material-takeoff/from-scope', {
+      sections: [
+        { label: 'Kitchen', project_type: 'kitchen_remodel', inputs: { kitchenSqft: 200 } },
+        { label: 'Bath', project_type: 'bathroom_remodel', inputs: { bathroomSqft: 60 } },
+      ], price: true, tier: 'better', markupPct: 20, laborPct: 100,
+    });
+    check('POST /from-scope price=true -> merged pricing block', scopePriced.status === 200 && scopePriced.json.pricing && scopePriced.json.pricing.ok === true);
+    check('  -> ONE profit layout for the whole scope', scopePriced.json.pricing.profit_layout.price > 0 && scopePriced.json.pricing.sections.length === 2);
+    check('  -> priced lines carry price_source', scopePriced.json.pricing.lines.every(l => l.price_source));
+    delete process.env.PRICING_MOCK;
+
+    // ── v2 from a proposal (POST /material-takeoff/from-proposal) — heuristic extractor ──
+    const propBody = { proposal_markdown: '## Kitchen\nRemodel the 200 sqft kitchen. Demo and paint.\n\n## Bathroom\nNew 60 sqft bathroom with a vanity.' };
+    const prop = await request(port, 'POST', '/material-takeoff/from-proposal', propBody);
+    check('POST /from-proposal -> 200 ok', prop.status === 200 && prop.json.ok === true);
+    check('  -> source_type proposal + composite', prop.json.source_type === 'proposal' && prop.json.project_type === 'composite');
+    check('  -> echoes extracted_scope (2 sections)', prop.json.extracted_scope && prop.json.extracted_scope.sections.length === 2);
+    check('  -> every line carries source_quote + confidence', prop.json.materials.every(m => 'source_quote' in m && 'confidence' in m));
+
+    const noScope = await request(port, 'POST', '/material-takeoff/from-proposal', { proposal_markdown: 'Please call me about a quote sometime.' });
+    check('POST /from-proposal no scope -> 200 with ok:false (not a 4xx/5xx)', noScope.status === 200 && noScope.json.ok === false && noScope.json.error === 'no_scope_extracted');
+
+    process.env.PRICING_MOCK = '1';
+    const propPriced = await request(port, 'POST', '/material-takeoff/from-proposal', { ...propBody, price: true, tier: 'better', markupPct: 20, laborPct: 100 });
+    check('POST /from-proposal price=true -> pricing block', propPriced.status === 200 && propPriced.json.pricing && propPriced.json.pricing.ok === true);
+    delete process.env.PRICING_MOCK;
+
+    // ── print-ready HTML export (U8) ──────────────────────────────────────
+    const htmlOut = await request(port, 'GET', '/material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&format=html');
+    check('format=html -> an HTML document', htmlOut.status === 200 && /<!doctype html>/i.test(htmlOut.text));
+    check('  -> served as text/html', /text\/html/.test(htmlOut.headers['content-type']));
+    check('  -> lists a material line (Base cabinets)', /Base cabinets/i.test(htmlOut.text));
+    const htmlScope = await request(port, 'POST', '/material-takeoff/from-scope', {
+      sections: [{ label: 'Kitchen', project_type: 'kitchen_remodel', inputs: { kitchenSqft: 200 } },
+        { label: 'Bath', project_type: 'bathroom_remodel', inputs: { bathroomSqft: 60 } }], format: 'html',
+    });
+    check('from-scope format=html -> section headers in HTML', htmlScope.status === 200 && /Kitchen/.test(htmlScope.text) && /Bath/.test(htmlScope.text));
+    check('HTML export escapes untrusted text (no injection)',
+      !/<script>bad/.test(renderTakeoffHtml({ ok: true, project_label: '<script>bad</script>', materials: [], fixtures_checklist: { plumbing: [], electrical: [] } })));
 
     // ── rate limiting ─────────────────────────────────────────────────────
     // Drive the exported limiter directly: tighten to 3/window, reset the buckets,

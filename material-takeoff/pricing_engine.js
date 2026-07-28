@@ -67,6 +67,57 @@ function numOr(v, fallback) {
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
+const PRICE_CONCURRENCY = 5;  // overlap lookups but stay under free-tier rate limits
+
+/**
+ * Price a list of material lines against ONE project's pricing config. Shared by the
+ * single-endpoint pricer (priceTakeoff) and the multi-section pricer (priceScopeTakeoff)
+ * so the per-line lookup, the outlier/floor guards, and field tagging live in exactly one
+ * place. Pure of labor/profit — callers apply those once over the merged set.
+ *
+ * Each returned line carries its `section_id` (from the material line) and, when priced,
+ * its `price_source` (the provider that answered: homedepot_live | mock | …). Lookups run
+ * CONCURRENTLY (capped) and input order is preserved. Never throws.
+ */
+async function priceMaterialLines(materials, pricingCfg, provider, tier) {
+  const lineCfg = (pricingCfg && pricingCfg.lines) || {};
+
+  const priceOne = async (m) => {
+    const cfg = lineCfg[m.key];
+    const query = cfg && cfg.search && cfg.search[tier];
+    const base = {
+      key: m.key, label: m.label, tier,
+      section_id: m.section_id || null,           // U2: line -> section link
+      order_qty: m.order_qty, order_unit: m.order_unit,
+      // pack_round lines (tile boxes / countertop slabs) are priced PER PACK — the HD price
+      // is per box/slab, so unit_price x order_qty (packs) is correct. Non-packed lines use
+      // the configured price_unit (or the order unit).
+      price_unit: (m.type === 'pack_round') ? m.order_unit : ((cfg && cfg.price_unit) || m.order_unit),
+      field_estimate: !!(cfg && cfg.field_estimate) || !!m.field_verify,
+    };
+    if (!cfg || !query) return { ...base, priced: false, price_source: null, reason: 'no_pricing_config' };
+
+    const res = await provider.lookup({ key: m.key, query, tier, priceUnit: base.price_unit,
+      maxPrice: cfg.max_unit_price, minPrice: cfg.min_unit_price });
+    if (!res || !res.ok) return { ...base, priced: false, price_source: null, reason: (res && res.reason) || 'lookup_failed', query };
+
+    return {
+      ...base,
+      priced: true,
+      unit_price: round2(res.unit_price),
+      line_cost: round2(res.unit_price * m.order_qty),
+      currency: res.currency || 'USD',
+      price_source: res.source || (provider.source || provider.id) || 'unknown',  // U3
+      product_title: res.product_title || null,
+      product_url: res.product_url || null,
+      query,
+    };
+  };
+
+  const priced = await mapLimit(materials, PRICE_CONCURRENCY, priceOne);
+  return { lines: priced.filter(p => p.priced), unpriced: priced.filter(p => !p.priced) };
+}
+
 /**
  * Price a built takeoff.
  *   takeoff  — the ok:true object from buildTakeoff()
@@ -93,46 +144,9 @@ async function priceTakeoff(takeoff, opts = {}) {
 
   const { tier, markupPct, laborCost, laborPct, warnings } =
     resolvePricingOpts(opts, pricingCfg);
-  const lineCfg = pricingCfg.lines || {};
 
-  // 1-3: price each material line at the chosen tier. Lookups are independent HTTP
-  // calls, so run them CONCURRENTLY (capped) rather than one-at-a-time — with a live
-  // scrape API at seconds per call, sequential pricing of 11 lines is 10-25s; capped
-  // concurrency brings a full takeoff down to ~one slow call. Order is preserved.
-  const priceOne = async (m) => {
-    const cfg = lineCfg[m.key];
-    const query = cfg && cfg.search && cfg.search[tier];
-    const base = {
-      key: m.key, label: m.label, tier,
-      order_qty: m.order_qty, order_unit: m.order_unit,
-      // pack_round lines (tile boxes / countertop slabs) are priced PER PACK — the HD
-      // price is per box/slab, so unit_price x order_qty (packs) is correct. Non-packed
-      // lines use the configured price_unit (or the order unit).
-      price_unit: (m.type === 'pack_round') ? m.order_unit : ((cfg && cfg.price_unit) || m.order_unit),
-      field_estimate: !!(cfg && cfg.field_estimate) || !!m.field_verify,
-    };
-    if (!cfg || !query) return { ...base, priced: false, reason: 'no_pricing_config' };
-
-    const res = await provider.lookup({ key: m.key, query, tier, priceUnit: base.price_unit,
-      maxPrice: cfg.max_unit_price });
-    if (!res || !res.ok) return { ...base, priced: false, reason: (res && res.reason) || 'lookup_failed', query };
-
-    return {
-      ...base,
-      priced: true,
-      unit_price: round2(res.unit_price),
-      line_cost: round2(res.unit_price * m.order_qty),
-      currency: res.currency || 'USD',
-      product_title: res.product_title || null,
-      product_url: res.product_url || null,
-      query,
-    };
-  };
-
-  const PRICE_CONCURRENCY = 5;  // overlap lookups but stay under free-tier rate limits
-  const priced = await mapLimit(takeoff.materials, PRICE_CONCURRENCY, priceOne);
-  const lines = priced.filter(p => p.priced);       // filter preserves order
-  const unpriced = priced.filter(p => !p.priced);
+  // 1-3: price each material line at the chosen tier (concurrent, capped, order-preserving).
+  const { lines, unpriced } = await priceMaterialLines(takeoff.materials, pricingCfg, provider, tier);
 
   // 4: labor line.
   const materialsCost = round2(lines.reduce((s, l) => s + l.line_cost, 0));
@@ -174,6 +188,130 @@ async function priceTakeoff(takeoff, opts = {}) {
   };
 }
 
+/**
+ * U3 — budget-derived fallback. When a live price can't be matched for a line, an unpriced
+ * line silently DROPS out of the total (understating the job). Instead, if the section came
+ * with a `budget_hint` (its materials budget in dollars), spread whatever budget is left
+ * after the live-priced lines EVENLY across the unmatched lines and tag them
+ * `price_source: 'proposal_budget'`. No budget, or the priced lines already meet it → the
+ * lines stay unpriced (we won't invent a number without a basis). Totals still reconcile.
+ */
+function budgetFallbackLines(pricedLines, unpricedLines, budgetHint) {
+  if (!unpricedLines.length) return { estimated: [], remainingUnpriced: [] };
+  const hint = Number(budgetHint);
+  if (!Number.isFinite(hint) || hint <= 0) return { estimated: [], remainingUnpriced: unpricedLines };
+
+  const pricedSum = pricedLines.reduce((s, l) => s + l.line_cost, 0);
+  const remaining = round2(Math.max(0, hint - pricedSum));
+  if (remaining <= 0) return { estimated: [], remainingUnpriced: unpricedLines };
+
+  const share = round2(remaining / unpricedLines.length);
+  const estimated = unpricedLines.map(u => ({
+    ...u,
+    priced: true,
+    estimated: true,                                  // budget-derived, not a live price
+    unit_price: u.order_qty > 0 ? round2(share / u.order_qty) : share,
+    line_cost: share,
+    currency: 'USD',
+    price_source: 'proposal_budget',
+    basis: 'budget_fallback',
+    note: 'Budget-derived estimate (no live price matched); refine before quoting.',
+  }));
+  return { estimated, remainingUnpriced: [] };
+}
+
+/**
+ * Price a MULTI-SECTION (scope / proposal) takeoff.
+ *   sectionTakeoffs — [{ section_id, project_type, materials, budget_hint }] from scope_engine
+ *   opts            — { provider (required), dataset, tier, markupPct, laborPct, laborCost }
+ * Each section's lines are priced against ITS OWN project pricing config (a composite job
+ * mixes a kitchen + a bath + a floor, each with different search terms), then merged and
+ * costed ONCE: one labor line, one profit layout over the whole scope. Unmatched lines run
+ * through the budget fallback. Same shape as priceTakeoff's output + a `sections[]`
+ * per-section cost breakdown. Never throws.
+ */
+async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
+  const provider = opts.provider;
+  if (!provider) {
+    return { ok: false, reason: 'pricing_unavailable',
+      message: 'No pricing provider. Set HOMEDEPOT_API_KEY to enable live Home Depot pricing.' };
+  }
+  if (!Array.isArray(sectionTakeoffs) || !sectionTakeoffs.length) {
+    return { ok: false, reason: 'no_takeoff', message: 'Pricing needs at least one section.' };
+  }
+  const ds = opts.dataset;
+  const firstDef = ds && ds.project_types && ds.project_types[sectionTakeoffs[0].project_type];
+  const firstCfg = (firstDef && firstDef.pricing) || { tiers: ['good', 'better', 'best'] };
+  const { tier, markupPct, laborCost, laborPct, warnings } = resolvePricingOpts(opts, firstCfg);
+
+  const allLines = [];
+  const allUnpriced = [];
+  const sectionBreakdown = [];
+
+  for (const st of sectionTakeoffs) {
+    const def = ds && ds.project_types && ds.project_types[st.project_type];
+    const cfg = def && def.pricing;
+    if (!cfg) {
+      // A section with no pricing config: report every line unpriced rather than crash.
+      for (const m of st.materials) {
+        allUnpriced.push({ key: m.key, label: m.label, section_id: st.section_id,
+          priced: false, price_source: null, reason: 'no_pricing_config' });
+      }
+      sectionBreakdown.push({ section_id: st.section_id, project_type: st.project_type,
+        materials_cost: 0, priced: 0, budget_estimated: 0, unpriced: st.materials.length });
+      continue;
+    }
+
+    const { lines, unpriced } = await priceMaterialLines(st.materials, cfg, provider, tier);
+    const { estimated, remainingUnpriced } = budgetFallbackLines(lines, unpriced, st.budget_hint);
+    const sectionLines = [...lines, ...estimated];
+    allLines.push(...sectionLines);
+    allUnpriced.push(...remainingUnpriced);
+    sectionBreakdown.push({
+      section_id: st.section_id, project_type: st.project_type,
+      materials_cost: round2(sectionLines.reduce((s, l) => s + l.line_cost, 0)),
+      priced: lines.length, budget_estimated: estimated.length, unpriced: remainingUnpriced.length,
+    });
+  }
+
+  // Cost the merged scope ONCE: one labor line, one profit layout.
+  const materialsCost = round2(allLines.reduce((s, l) => s + l.line_cost, 0));
+  const laborBasis = laborCost != null ? 'explicit' : 'pct_of_materials';
+  const laborTotal = laborCost != null ? round2(laborCost) : round2(materialsCost * (laborPct / 100));
+  const totalCost = round2(materialsCost + laborTotal);
+  const price = round2(totalCost * (1 + markupPct / 100));
+  const profit = round2(price - totalCost);
+  const marginPct = price > 0 ? round1((profit / price) * 100) : 0;
+
+  return {
+    ok: true,
+    source: provider.source || provider.id || 'unknown',
+    currency: 'USD',
+    tier,
+    tier_label: (firstCfg.tier_labels && firstCfg.tier_labels[tier]) || tier,
+    lines: allLines,
+    unpriced_lines: allUnpriced,
+    fully_priced: allUnpriced.length === 0,
+    sections: sectionBreakdown,
+    labor: {
+      basis: laborBasis,
+      pct_of_materials: laborBasis === 'pct_of_materials' ? laborPct : null,
+      cost: laborTotal,
+    },
+    profit_layout: {
+      materials_cost: materialsCost,
+      labor_cost: laborTotal,
+      total_cost: totalCost,
+      markup_pct: round1(markupPct),
+      price,
+      profit,
+      margin_pct: marginPct,
+    },
+    warnings: warnings.length ? warnings : undefined,
+    disclaimer: (ds && ds._meta && ds._meta.pricing_disclaimer) || undefined,
+  };
+}
+
 /** Render the profit layout as a human-readable block (append to renderTakeoffText). */
 function renderPricingText(p) {
   if (!p) return '';
@@ -203,4 +341,7 @@ function renderPricingText(p) {
   return L.join('\n');
 }
 
-module.exports = { priceTakeoff, renderPricingText, resolvePricingOpts };
+module.exports = {
+  priceTakeoff, priceScopeTakeoff, priceMaterialLines,
+  renderPricingText, resolvePricingOpts,
+};

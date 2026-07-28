@@ -95,7 +95,13 @@ function normalizeProductUrl(url) {
 // rather than blindly taking the first priced result, compare against the MEDIAN price of
 // the result set and skip anything wildly above it. Self-tuning (no per-line price tables
 // to maintain); opts.maxPrice adds an optional hard ceiling on top.
-//   opts.maxPrice      — absolute ceiling for a unit price
+//
+// The SAME failure exists on the LOW side: countertop / vanity-top searches surface 4x4in
+// SAMPLE SWATCHES (~$3-5) beside the real slabs, and a swatch read as a per-sqft price
+// turns a 40 sqft counter into a ~$160 line — a silent UNDER-statement (the mirror of the
+// pallet over-statement). opts.minPrice sets a floor that drops swatch/sample prices.
+//   opts.maxPrice      — absolute ceiling for a unit price (drop pallet/bulk SKUs)
+//   opts.minPrice      — absolute floor for a unit price (drop sample swatches)
 //   opts.outlierFactor — multiple of the median to allow (default 12)
 function extractProduct(json, opts = {}) {
   if (!json || typeof json !== 'object') return null;
@@ -108,13 +114,23 @@ function extractProduct(json, opts = {}) {
     (json.product ? [json.product] : null) ||
     [json];
 
-  const priced = [];
+  let priced = [];
   for (const c of candidates) {
     if (!c) continue;
     const price = parsePrice(c.price ?? c.current_price ?? c.pricing);
     if (price != null) priced.push({ c, price });
   }
   if (!priced.length) return null;
+
+  // LOW-SIDE FLOOR: drop anything below the configured floor BEFORE the median is taken,
+  // so a swatch-heavy result set can't drag the median down and legitimise a swatch. If
+  // NOTHING clears the floor, report no match (null) rather than invent a too-low price —
+  // an un-priced line degrades to the budget fallback, which beats a wrong cheap number.
+  if (opts.minPrice > 0) {
+    const kept = priced.filter(x => x.price >= opts.minPrice);
+    if (!kept.length) return null;
+    priced = kept;
+  }
 
   // Median of everything the search returned = a robust "what does this cost?" signal.
   const sorted = priced.map(x => x.price).slice().sort((a, b) => a - b);
@@ -172,9 +188,12 @@ function createHomeDepotProvider(opts = {}) {
   return {
     id: 'homedepot_live',
     source: 'homedepot_live',
-    async lookup({ query, maxPrice }) {
+    async lookup({ query, minPrice, maxPrice }) {
       if (!query) return { ok: false, reason: 'no_search_term' };
-      if (cache.has(query)) return cache.get(query);
+      // Key the cache on the guards too: the same term with a different floor/ceiling is a
+      // different question and must not return a cached answer from the other config.
+      const cacheKey = `${query}|${minPrice || ''}|${maxPrice || ''}`;
+      if (cache.has(cacheKey)) return cache.get(cacheKey);
 
       let result;
       try {
@@ -192,7 +211,7 @@ function createHomeDepotProvider(opts = {}) {
         } else {
           let json;
           try { json = await res.json(); } catch { json = null; }
-          const product = extractProduct(json, { maxPrice });
+          const product = extractProduct(json, { minPrice, maxPrice });
           result = product
             ? { ok: true, unit_price: product.price, currency: 'USD',
                 product_title: product.title, product_url: product.url, source: 'homedepot_live' }
@@ -201,7 +220,7 @@ function createHomeDepotProvider(opts = {}) {
       } catch (err) {
         result = { ok: false, reason: 'network_error', detail: String((err && err.message) || err) };
       }
-      cache.set(query, result);
+      cache.set(cacheKey, result);
       return result;
     },
   };
@@ -237,6 +256,12 @@ const MOCK_UNIT_PRICES = {
   paint:                  { good: 24,  better: 38,  best: 62  },  // per gal
   baseboard:              { good: 9,   better: 14,  best: 26  },  // per 16 ft stick
   cabinet_hardware:       { good: 2,   better: 5,   best: 12  },  // per pull
+  // site_protection add-on group (U5)
+  floor_protection:       { good: 22,  better: 40,  best: 75  },  // per roll
+  plastic_sheeting:       { good: 15,  better: 24,  best: 45  },  // per roll
+  masking_tape:           { good: 5,   better: 8,   best: 13  },  // per roll
+  dust_barrier:           { good: 30,  better: 60,  best: 120 },  // per kit
+  hepa_filter:            { good: 35,  better: 65,  best: 130 },  // per filter
   // flooring_only lines (Phase 5)
   flooring_tile:          { good: 2,   better: 4,   best: 9   },  // per sqft
   flooring_lvp:           { good: 2,   better: 4,   best: 7   },  // per sqft

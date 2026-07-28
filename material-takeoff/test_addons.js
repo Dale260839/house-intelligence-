@@ -77,6 +77,25 @@ const ADDONS = ['demolition_dumpster', 'subfloor', 'primer', 'paint', 'baseboard
   check('bathroom hardware absent when no vanity', !has(B({ includeHardware: true, includeVanity: false }), 'cabinet_hardware'));
 
   console.log('\n========================================');
+  console.log('SITE PROTECTION (U5) — all area-derived, off by default');
+  console.log('========================================');
+  const SITE = ['floor_protection', 'plastic_sheeting', 'masking_tape', 'dust_barrier', 'hepa_filter'];
+  check('site protection off by default (kitchen)', SITE.every(k => !has(kBase, k)));
+  check('site protection off by default (bathroom)', SITE.every(k => !has(bBase, k)));
+  const kSite = K({ includeSiteProtection: true });
+  check('includeSiteProtection -> all 5 site lines', SITE.every(k => has(kSite, k)));
+  check('  floor protection covers the floor area (200 /350 -> 1 roll)', line(kSite, 'floor_protection').order_qty === 1 && line(kSite, 'floor_protection').order_unit === 'roll');
+  check('  hepa filters derived from area (200 /500, min 1 -> 1)', line(kSite, 'hepa_filter').order_qty === 1);
+  check('  dust barriers derived from openings (2 openings, min 1 -> 2 kits)', line(kSite, 'dust_barrier').order_qty === 2 && line(kSite, 'dust_barrier').order_unit === 'kit');
+  check('  larger floor -> more HEPA filters (1600 /500 -> 4)', line(K({ kitchenSqft: 1600, includeSiteProtection: true }), 'hepa_filter').order_qty === 4);
+  check('  every site line has an auditable basis', SITE.every(k => typeof line(kSite, k).basis === 'string' && line(kSite, k).basis.length > 0));
+  check('  site protection is additive only (base 11 + 5 = 16)', kSite.materials.length === 16);
+
+  // Site protection works on a flooring-only job too (floor area drives it — no walls needed).
+  const fSite = buildTakeoff({ projectType: 'flooring_only', floorSqft: 300, includeSiteProtection: true }, ds);
+  check('flooring_only gets site protection too (floor-area driven)', SITE.every(k => fSite.materials.some(m => m.key === k)));
+
+  console.log('\n========================================');
   console.log('PRICING — add-on lines are priceable');
   console.log('========================================');
   const mock = createMockPricingProvider();
@@ -89,6 +108,9 @@ const ADDONS = ['demolition_dumpster', 'subfloor', 'primer', 'paint', 'baseboard
   }));
   const prBase = await priceTakeoff(kBase, { provider: mock, dataset: ds, tier: 'better' });
   check('  add-ons increase the material total', pr.profit_layout.materials_cost > prBase.profit_layout.materials_cost);
+
+  const prSite = await priceTakeoff(K({ includeSiteProtection: true }), { provider: mock, dataset: ds, tier: 'better' });
+  check('  site protection lines are priceable', SITE.every(k => { const l = prSite.lines.find(x => x.key === k); return l && l.line_cost > 0; }));
 
   console.log('\n========================================');
   console.log(`RESULT: ${pass} passed, ${fail} failed`);

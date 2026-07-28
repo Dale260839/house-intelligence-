@@ -85,6 +85,27 @@ function coverageLine(key, label, rawDriver, driverUnit, coverage, coverageUnit,
   };
 }
 
+// Passthrough / long-tail item (U5): a scope- or proposal-line the ruleset can't DERIVE
+// from geometry (e.g. "pot-filler rough-in", "custom range hood"). Carried straight through
+// as a material line marked ESTIMATED (not calculated), with its own basis and — for
+// proposals — the source_quote it was extracted from. Priced like any other line if a
+// search term is configured; otherwise it degrades to the budget fallback.
+function passthroughLine(key, label, qty, unit, opts = {}) {
+  return {
+    key: String(key || 'passthrough_item'),
+    label: label || 'Passthrough item',
+    type: 'passthrough',
+    calculation: 'estimated',
+    order_qty: isPosNum(qty) ? Number(qty) : 1,
+    order_unit: unit || 'ea',
+    field_verify: true,
+    basis: opts.basis || 'carried through from scope/proposal (not derived)',
+    source_quote: opts.source_quote || null,
+    confidence: opts.confidence || null,       // stated | inferred | assumed (proposal extraction)
+    note: opts.note || null,
+  };
+}
+
 /**
  * Resolve a fixtures template (plumbing/electrical rough-in) into concrete quantities.
  * Generic over any `qty_per_<driver>` key: it multiplies by ctx[<driver>] (snake_case),
@@ -127,5 +148,5 @@ function buildFixtures(template, ctx = {}) {
 
 module.exports = {
   round1, ceil, isPosNum,
-  madeToMeasureLine, wasteFactorLine, coverageLine, buildFixtures,
+  madeToMeasureLine, wasteFactorLine, coverageLine, passthroughLine, buildFixtures,
 };

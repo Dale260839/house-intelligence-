@@ -196,6 +196,10 @@
           "description": "Add-on (default off): cabinet pulls / knobs, derived from cabinet linear feet."
         },
         {
+          "name": "includeSiteProtection", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): site protection / dust control - floor protection, plastic sheeting, tape, dust barriers, and HEPA filters, all derived from area."
+        },
+        {
           "name": "paintCoats", "type": "number", "required": false, "default": 2, "min": 1, "unit": "count",
           "description": "Number of topcoats when includePaint is on (primer is always 1 coat)."
         }
@@ -297,6 +301,13 @@
           "hardware": {
             "pulls_per_cabinet_lf": 0.9,
             "note": "~0.9 pulls/knobs per cabinet LF (mix of doors and drawer banks). Field-verify the actual door/drawer count."
+          },
+          "site_protection": {
+            "floor_protection": { "coverage_sqft_per_roll": 350, "order_unit": "roll", "note": "Ram board / builder paper over finished floors during the job (~350 sqft/roll)." },
+            "plastic_sheeting": { "sqft_per_sqft_floor": 1.5, "coverage_sqft_per_roll": 400, "order_unit": "roll", "note": "6 mil poly for dust walls + covering fixtures/openings (~1.5x floor area, 400 sqft/roll)." },
+            "masking_tape": { "lf_per_sqft_floor": 0.4, "roll_lf": 180, "order_unit": "roll", "note": "Masking / painters tape for seams, edges, and sealing sheeting (~180 LF/roll)." },
+            "dust_barrier": { "per_opening": 1, "min": 1, "order_unit": "kit", "note": "Zip-wall / dust-door kit to seal each room opening (min 1)." },
+            "hepa_filter": { "sqft_per_filter": 500, "min": 1, "order_unit": "ea", "note": "HEPA filter for an air scrubber during demo/sanding (~1 per 500 sqft, min 1)." }
           }
         }
       },
@@ -350,9 +361,9 @@
             "note": "Priced per linear foot from a representative stock wall cabinet. Made-to-measure — rough budget only."
           },
           "countertop": {
-            "price_unit": "sqft", "field_estimate": true,
-            "search": { "good": "laminate countertop", "better": "quartz countertop", "best": "granite slab countertop" },
-            "note": "Priced per finished square foot. Made-to-measure (fabrication + edges vary) — rough budget only."
+            "price_unit": "sqft", "field_estimate": true, "min_unit_price": 10,
+            "search": { "good": "laminate countertop sheet", "better": "quartz countertop slab", "best": "granite countertop slab" },
+            "note": "Priced per finished square foot. Made-to-measure (fabrication + edges vary) — rough budget only. min_unit_price floors out the 4x4in sample swatches these searches also return (a swatch read as $/sqft understates the whole counter)."
           },
           "backsplash_tile": {
             "price_unit": "sqft",
@@ -410,7 +421,12 @@
           "cabinet_hardware": {
             "price_unit": "ea",
             "search": { "good": "cabinet pulls 10 pack", "better": "brushed nickel cabinet pull", "best": "solid brass cabinet pull" }
-          }
+          },
+          "floor_protection": { "price_unit": "roll", "search": { "good": "builder paper floor protection", "better": "ram board floor protection", "best": "reusable floor protection roll" } },
+          "plastic_sheeting": { "price_unit": "roll", "search": { "good": "6 mil plastic sheeting roll", "better": "clear poly sheeting roll", "best": "reinforced poly sheeting roll" } },
+          "masking_tape": { "price_unit": "roll", "search": { "good": "masking tape", "better": "blue painters tape", "best": "delicate surface painters tape" } },
+          "dust_barrier": { "price_unit": "kit", "field_estimate": true, "search": { "good": "plastic dust barrier door kit", "better": "zip wall dust barrier kit", "best": "zipwall spring loaded pole kit" } },
+          "hepa_filter": { "price_unit": "ea", "search": { "good": "hepa filter air scrubber", "better": "hepa air scrubber filter replacement", "best": "true hepa filter air scrubber" } }
         }
       }
     },
@@ -477,6 +493,8 @@
           "description": "Add-on (default off): baseboard trim around the perimeter, less door openings." },
         { "name": "includeHardware", "type": "boolean", "required": false, "default": false,
           "description": "Add-on (default off): vanity pulls / knobs, derived from vanity linear feet." },
+        { "name": "includeSiteProtection", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): site protection / dust control - floor protection, plastic sheeting, tape, dust barriers, and HEPA filters, all derived from area." },
         { "name": "paintCoats", "type": "number", "required": false, "default": 2, "min": 1, "unit": "count",
           "description": "Number of topcoats when includePaint is on (primer is always 1 coat)." }
       ],
@@ -534,6 +552,13 @@
           "hardware": {
             "pulls_per_cabinet_lf": 0.9,
             "note": "~0.9 pulls/knobs per vanity LF. Field-verify the actual door/drawer count."
+          },
+          "site_protection": {
+            "floor_protection": { "coverage_sqft_per_roll": 350, "order_unit": "roll", "note": "Ram board / builder paper over finished floors during the job (~350 sqft/roll)." },
+            "plastic_sheeting": { "sqft_per_sqft_floor": 1.5, "coverage_sqft_per_roll": 400, "order_unit": "roll", "note": "6 mil poly for dust walls + covering fixtures/openings (~1.5x floor area, 400 sqft/roll)." },
+            "masking_tape": { "lf_per_sqft_floor": 0.4, "roll_lf": 180, "order_unit": "roll", "note": "Masking / painters tape for seams, edges, and sealing sheeting (~180 LF/roll)." },
+            "dust_barrier": { "per_opening": 1, "min": 1, "order_unit": "kit", "note": "Zip-wall / dust-door kit to seal each room opening (min 1)." },
+            "hepa_filter": { "sqft_per_filter": 500, "min": 1, "order_unit": "ea", "note": "HEPA filter for an air scrubber during demo/sanding (~1 per 500 sqft, min 1)." }
           }
         }
       },
@@ -575,13 +600,18 @@
           "drywall_tape": { "price_unit": "250 ft roll", "search": { "good": "paper drywall joint tape 250 ft", "better": "self adhesive mesh drywall tape", "best": "paper drywall joint tape 500 ft" } },
           "drywall_screws": { "price_unit": "1 lb box", "search": { "good": "1-1/4 in coarse drywall screws 1 lb", "better": "1-1/4 in coarse drywall screws 5 lb", "best": "1-1/4 in fine drywall screws collated" } },
           "vanity": { "price_unit": "LF", "field_estimate": true, "search": { "good": "single sink bathroom vanity", "better": "shaker bathroom vanity with top", "best": "solid wood bathroom vanity soft close" } },
-          "vanity_top": { "price_unit": "sqft", "field_estimate": true, "search": { "good": "cultured marble vanity top", "better": "quartz vanity top", "best": "granite vanity top" } },
+          "vanity_top": { "price_unit": "sqft", "field_estimate": true, "min_unit_price": 10, "search": { "good": "cultured marble vanity top", "better": "quartz vanity top slab", "best": "granite vanity top slab" }, "note": "min_unit_price floors out the 4x4in sample swatches these searches also return (a swatch read as $/sqft understates the top)." },
           "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" }, "note": "Dumpster/haul-away pricing varies hugely by locality - rough placeholder; use a local quote." },
           "subfloor": { "price_unit": "sheet", "search": { "good": "7/16 in osb sheathing 4x8", "better": "23/32 in plywood subfloor 4x8", "best": "cement board underlayment 4x8" } },
           "primer": { "price_unit": "gal", "search": { "good": "interior primer 1 gal", "better": "interior stain blocking primer 1 gal", "best": "interior bonding primer 1 gal" } },
           "paint": { "price_unit": "gal", "search": { "good": "interior latex paint 1 gal", "better": "bathroom paint 1 gal", "best": "interior premium satin paint 1 gal" } },
           "baseboard": { "price_unit": "16 ft stick", "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" } },
-          "cabinet_hardware": { "price_unit": "ea", "search": { "good": "cabinet pulls 10 pack", "better": "brushed nickel cabinet pull", "best": "solid brass cabinet pull" } }
+          "cabinet_hardware": { "price_unit": "ea", "search": { "good": "cabinet pulls 10 pack", "better": "brushed nickel cabinet pull", "best": "solid brass cabinet pull" } },
+          "floor_protection": { "price_unit": "roll", "search": { "good": "builder paper floor protection", "better": "ram board floor protection", "best": "reusable floor protection roll" } },
+          "plastic_sheeting": { "price_unit": "roll", "search": { "good": "6 mil plastic sheeting roll", "better": "clear poly sheeting roll", "best": "reinforced poly sheeting roll" } },
+          "masking_tape": { "price_unit": "roll", "search": { "good": "masking tape", "better": "blue painters tape", "best": "delicate surface painters tape" } },
+          "dust_barrier": { "price_unit": "kit", "field_estimate": true, "search": { "good": "plastic dust barrier door kit", "better": "zip wall dust barrier kit", "best": "zipwall spring loaded pole kit" } },
+          "hepa_filter": { "price_unit": "ea", "search": { "good": "hepa filter air scrubber", "better": "hepa air scrubber filter replacement", "best": "true hepa filter air scrubber" } }
         }
       }
     },
@@ -618,7 +648,9 @@
         { "name": "includeSubfloor", "type": "boolean", "required": false, "default": false,
           "description": "Add-on (default off): subfloor panels over the floor area." },
         { "name": "includeTrim", "type": "boolean", "required": false, "default": false,
-          "description": "Add-on (default off): baseboard trim around the perimeter, less door openings." }
+          "description": "Add-on (default off): baseboard trim around the perimeter, less door openings." },
+        { "name": "includeSiteProtection", "type": "boolean", "required": false, "default": false,
+          "description": "Add-on (default off): site protection / dust control - floor protection, plastic sheeting, tape, dust barriers, and HEPA filters, all derived from area." }
       ],
 
       "geometry": {
@@ -654,7 +686,14 @@
         "addons": {
           "demolition": { "debris_cy_per_sqft": 0.03, "dumpster_cy": 20, "dumpster_label": "20 cu yd dumpster", "note": "Floor tear-out only (~0.03 cu yd per sqft) - far less debris than a full room gut." },
           "subfloor": { "sheet_sqft": 32, "waste_pct": 0.10, "note": "4x8 subfloor panels (32 sqft each) with 10% cutting waste." },
-          "trim": { "stick_lf": 16, "waste_pct": 0.10, "door_width_ft": 3, "note": "Baseboard by perimeter less ~3 ft per opening, +10% for miters / offcuts, sold in 16 ft sticks." }
+          "trim": { "stick_lf": 16, "waste_pct": 0.10, "door_width_ft": 3, "note": "Baseboard by perimeter less ~3 ft per opening, +10% for miters / offcuts, sold in 16 ft sticks." },
+          "site_protection": {
+            "floor_protection": { "coverage_sqft_per_roll": 350, "order_unit": "roll", "note": "Ram board / builder paper over the finished floor during the job (~350 sqft/roll)." },
+            "plastic_sheeting": { "sqft_per_sqft_floor": 1.5, "coverage_sqft_per_roll": 400, "order_unit": "roll", "note": "6 mil poly for dust walls + covering fixtures/openings (~1.5x floor area, 400 sqft/roll)." },
+            "masking_tape": { "lf_per_sqft_floor": 0.4, "roll_lf": 180, "order_unit": "roll", "note": "Masking / painters tape for seams, edges, and sealing sheeting (~180 LF/roll)." },
+            "dust_barrier": { "per_opening": 1, "min": 1, "order_unit": "kit", "note": "Zip-wall / dust-door kit to seal each room opening (min 1)." },
+            "hepa_filter": { "sqft_per_filter": 500, "min": 1, "order_unit": "ea", "note": "HEPA filter for an air scrubber during tear-out/sanding (~1 per 500 sqft, min 1)." }
+          }
         }
       },
 
@@ -679,7 +718,12 @@
           "transitions":         { "price_unit": "ea", "search": { "good": "vinyl transition strip", "better": "wood floor transition strip", "best": "aluminum floor transition strip" } },
           "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" }, "note": "Haul-away pricing varies by locality - rough placeholder; use a local quote." },
           "subfloor":            { "price_unit": "sheet", "search": { "good": "7/16 in osb sheathing 4x8", "better": "23/32 in plywood subfloor 4x8", "best": "3/4 in tongue and groove plywood subfloor" } },
-          "baseboard":           { "price_unit": "16 ft stick", "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" } }
+          "baseboard":           { "price_unit": "16 ft stick", "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" } },
+          "floor_protection":     { "price_unit": "roll", "search": { "good": "builder paper floor protection", "better": "ram board floor protection", "best": "reusable floor protection roll" } },
+          "plastic_sheeting":     { "price_unit": "roll", "search": { "good": "6 mil plastic sheeting roll", "better": "clear poly sheeting roll", "best": "reinforced poly sheeting roll" } },
+          "masking_tape":         { "price_unit": "roll", "search": { "good": "masking tape", "better": "blue painters tape", "best": "delicate surface painters tape" } },
+          "dust_barrier":         { "price_unit": "kit", "field_estimate": true, "search": { "good": "plastic dust barrier door kit", "better": "zip wall dust barrier kit", "best": "zipwall spring loaded pole kit" } },
+          "hepa_filter":          { "price_unit": "ea", "search": { "good": "hepa filter air scrubber", "better": "hepa air scrubber filter replacement", "best": "true hepa filter air scrubber" } }
         }
       }
     }

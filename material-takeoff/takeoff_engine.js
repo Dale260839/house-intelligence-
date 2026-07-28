@@ -96,15 +96,23 @@ function buildTakeoff(input, dataset) {
 
   // Dispatch the quantity derivation to the project's builder.
   const result = builder.build(v, def, ds);
-  const fieldVerifyKeys = result.materials.filter(m => m.field_verify).map(m => m.key);
+
+  // v2: stamp every material line with the section it belongs to. On the single-endpoint
+  // path there is exactly one section (default "section-1"); the multi-section aggregator
+  // (scope_engine.js) passes a real per-section id through input.sectionId. This is the
+  // durable line→section link the from-scope / from-proposal responses carry forward.
+  const sectionId = (input && input.sectionId) || 'section-1';
+  const materials = result.materials.map(m => ({ ...m, section_id: sectionId }));
+  const fieldVerifyKeys = materials.filter(m => m.field_verify).map(m => m.key);
 
   return {
     ok: true,
     project_type: pt,
     project_label: def.label,
+    source_type: 'manual',              // manual | scope | proposal — how the takeoff was requested
     inputs: v,                          // resolved inputs (defaults applied)
     derived: result.derived,
-    materials: result.materials,
+    materials,
     fixtures_checklist: result.fixtures_checklist,
     summary: result.summary,
     field_verify_items: fieldVerifyKeys,
@@ -150,6 +158,7 @@ function renderTakeoffText(t) {
     let math;
     if (m.type === 'made_to_measure') math = `${m.raw} ${m.raw_unit} (made-to-measure, no waste)`;
     else if (m.type === 'waste_factor') math = `${m.raw} ${m.raw_unit} +${m.waste_pct}%`;
+    else if (m.type === 'passthrough') math = `${m.order_qty} ${m.order_unit} (estimated passthrough${m.source_quote ? ', from proposal' : ''})`;
     else math = `${m.raw} ${m.raw_unit} @ ${m.coverage} ${m.coverage_unit}`;
     const fv = m.field_verify ? '  [FIELD-VERIFY]' : '';
     const orderQty = m.type === 'coverage' ? `${m.order_qty} x ${m.order_unit}` : `${m.order_qty} ${m.order_unit}`;

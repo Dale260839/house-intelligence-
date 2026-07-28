@@ -159,6 +159,37 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   check('outlierFactor is tunable', extractProduct(withPallet, { outlierFactor: 2000 }).price === 19275);
   check('extractProduct normalizes apionline -> www.homedepot.com', extractProduct({ products: [{ title: 'T', price: 5, link: 'https://apionline.homedepot.com/p/x/123' }] }).url === 'https://www.homedepot.com/p/x/123');
 
+  // LOW-SIDE FLOOR (swatch guard, U4): the mirror of the pallet guard. Countertop / vanity-top
+  // searches surface 4x4in SAMPLE SWATCHES (~$4) beside the real slabs; a swatch read as a
+  // $/sqft price silently UNDER-states the whole counter. min_unit_price floors them out.
+  const withSwatch = { products: [
+    { title: 'Quartz Countertop Sample 4 in. x 4 in.', price: 3.98 },
+    { title: 'Calacatta Quartz Countertop Slab', price: 55.00 },
+    { title: 'Quartz Countertop', price: 62.00 },
+  ] };
+  check('low-side floor drops a $4 sample swatch, picks the slab', extractProduct(withSwatch, { minPrice: 10 }).price === 55);
+  check('  the picked title aligns to the slab, not the swatch', /slab/i.test(extractProduct(withSwatch, { minPrice: 10 }).title));
+  check('  without the floor the swatch is taken (the bug it guards)', extractProduct(withSwatch).price === 3.98);
+  check('all-swatch result + floor -> null (degrade to no_match, not a wrong low price)',
+    extractProduct({ products: [{ price: 3.98 }, { price: 4.5 }] }, { minPrice: 10 }) === null);
+  check('floor + ceiling together: both swatch AND pallet dropped', extractProduct({ products: [
+    { title: 'swatch', price: 4 }, { title: 'pallet', price: 9000 }, { title: 'slab', price: 58 }] },
+    { minPrice: 10, maxPrice: 500 }).price === 58);
+
+  // Live provider threads minPrice end-to-end.
+  const swatchFetch = async () => ({ ok: true, status: 200,
+    async json() { return { products: [{ title: 'Sample', price: 3.98 }, { title: 'Quartz Slab', price: 54.5 }] }; },
+    async text() { return ''; } });
+  const floored = createHomeDepotProvider({ apiKey: 'K', fetchImpl: swatchFetch });
+  const fr = await floored.lookup({ query: 'quartz countertop slab', minPrice: 10 });
+  check('live provider passes minPrice to extractProduct (swatch skipped)', fr.ok === true && fr.unit_price === 54.5);
+
+  // The two swatch-prone made-to-measure lines carry the floor in the dataset.
+  check('dataset: kitchen countertop has a min_unit_price floor',
+    ds.project_types.kitchen_remodel.pricing.lines.countertop.min_unit_price >= 5);
+  check('dataset: bathroom vanity_top has a min_unit_price floor',
+    ds.project_types.bathroom_remodel.pricing.lines.vanity_top.min_unit_price >= 5);
+
   const url = buildSearchUrl('', 'SECRET', 'thinset mortar 50 lb');
   check('buildSearchUrl default = SerpApi home_depot + q + api_key', /serpapi\.com/.test(url) && /q=thinset%20mortar%2050%20lb/.test(url) && /api_key=SECRET/.test(url));
   const tmpl = buildSearchUrl('https://api.example.com/hd?term={query}&key={key}', 'K', 'grout');

@@ -46,8 +46,11 @@ const { URL } = require('url');
 const {
   buildTakeoff, getProjectTypes, renderTakeoffText, loadDataset,
 } = require('./takeoff_engine.js');
-const { priceTakeoff, renderPricingText } = require('./pricing_engine.js');
+const { buildScopeTakeoff, buildProposalTakeoff } = require('./scope_engine.js');
+const { priceTakeoff, priceScopeTakeoff, renderPricingText } = require('./pricing_engine.js');
 const { selectPricingProvider } = require('./pricing_provider.js');
+const { selectExtractionProvider } = require('./extraction_provider.js');
+const { renderTakeoffHtml } = require('./pdf_export.js');
 const { clientKey, selectRateLimiter } = require('./rate_limiter.js');
 
 // Load the dataset once at boot and reuse it for every request (it never changes at
@@ -95,6 +98,17 @@ function sendText(res, status, text) {
   res.end(body);
 }
 
+// Print-ready HTML (U8 export path — the client turns it into a PDF via Ctrl+P).
+function sendHtml(res, status, html) {
+  const body = String(html);
+  res.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': Buffer.byteLength(body),
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(body);
+}
+
 // Read and JSON-parse a request body, capped so a giant payload can't OOM us.
 function readJsonBody(req, limit = 64 * 1024) {
   return new Promise((resolve, reject) => {
@@ -118,6 +132,11 @@ function isTextFormat(v) {
   return String(v || '').toLowerCase() === 'text';
 }
 
+function isHtmlFormat(v) {
+  const s = String(v || '').toLowerCase();
+  return s === 'html' || s === 'print' || s === 'pdf';   // print-ready HTML export (U8)
+}
+
 function isTruthy(v) {
   const s = String(v == null ? '' : v).toLowerCase();
   return s === 'true' || s === '1' || s === 'yes' || s === 'on';
@@ -139,7 +158,9 @@ function handleIndex(res) {
       'GET /material-takeoff/project-types': 'supported project types + input form contract',
       'POST /material-takeoff': 'body: { projectType, kitchenSqft, ...optional } -> full takeoff',
       'GET /material-takeoff?projectType=kitchen_remodel&kitchenSqft=200': 'same, query-driven',
-      hint: 'add &format=text (GET) or "format":"text" (POST) for a rendered block',
+      'POST /material-takeoff/from-scope': 'body: { sections:[{ project_type, inputs, add_ons?, budget_hint? }], price?, ... } -> merged multi-section takeoff (project_type "composite" when >1). Every line carries section_id.',
+      'POST /material-takeoff/from-proposal': 'body: { proposal_markdown, budget_total?, budget_sections?, price?, ... } -> extracts a scope from free text (LLM when EXTRACTION_API_KEY set, else deterministic heuristic) then runs the takeoff. Adds extracted_scope + per-line source_quote/confidence.',
+      hint: 'add format=text for a rendered block, or format=html (a.k.a. print/pdf) for a print-ready sheet you can save as PDF from the browser',
       pricing: 'add price=true to attach live Home Depot pricing + a profit layout. Options: tier=good|better|best, markupPct, laborPct (percent of materials) or laborCost (dollars). Requires HOMEDEPOT_API_KEY on the server; without it pricing returns { ok:false, reason:"pricing_unavailable" } while quantities still return.',
     },
     pricing_enabled: !!selectPricingProvider(process.env).provider,
@@ -178,12 +199,102 @@ async function handleTakeoff(res, params) {
     });
   }
 
+  if (isHtmlFormat(params.format)) return sendHtml(res, 200, renderTakeoffHtml(takeoff));
   if (isTextFormat(params.format)) {
     let text = renderTakeoffText(takeoff);
     if (takeoff.pricing) text += '\n' + renderPricingText(takeoff.pricing);
     return sendText(res, 200, text);
   }
   return sendJson(res, 200, takeoff);
+}
+
+// v2: multi-section SCOPE. Body carries a sections[] array (each its own project_type +
+// inputs + add_ons + budget_hint); the aggregator runs each section's builder and merges.
+// Pricing (opt-in price=true) applies to the WHOLE scope: one labor line, one profit layout.
+// The existing POST /material-takeoff is untouched — this is a separate route.
+async function handleScopeTakeoff(res, body) {
+  const scope = buildScopeTakeoff(body, DATASET);
+  if (!scope.ok) {
+    if (isTextFormat(body.format)) return sendText(res, 400, scope.message);
+    return sendJson(res, 400, scope);
+  }
+
+  if (isTruthy(body.price)) {
+    const { provider } = selectPricingProvider(process.env);
+    scope.pricing = await priceScopeTakeoff(scope.section_takeoffs, {
+      provider,
+      dataset: DATASET,
+      tier: body.tier,
+      markupPct: body.markupPct,
+      laborPct: body.laborPct,
+      laborCost: body.laborCost,
+      budget_total: body.budget_total,
+      budget_sections: body.budget_sections,
+    });
+  }
+
+  // Strip the internal per-section takeoffs (they just duplicate `materials`).
+  const { section_takeoffs, ...publicScope } = scope;
+
+  if (isHtmlFormat(body.format)) return sendHtml(res, 200, renderTakeoffHtml(publicScope));
+  if (isTextFormat(body.format)) {
+    let text = renderTakeoffText(publicScope);
+    if (publicScope.pricing) text += '\n' + renderPricingText(publicScope.pricing);
+    return sendText(res, 200, text);
+  }
+  return sendJson(res, 200, publicScope);
+}
+
+// v2: from a free-text PROPOSAL. An extraction provider (LLM when EXTRACTION_API_KEY is set,
+// else the deterministic heuristic) turns markdown into the from-scope shape, then the same
+// deterministic aggregator runs. A proposal with no recognizable scope returns a NORMAL 200
+// with ok:false (the caller can act on it) — never a crash.
+async function handleProposalTakeoff(res, body) {
+  const { provider } = selectExtractionProvider(process.env);
+
+  let proposal;
+  try {
+    proposal = await buildProposalTakeoff(body, DATASET, provider);
+  } catch (err) {
+    console.error('[server] extraction error:', err);
+    return sendJson(res, 200, { ok: false, source_type: 'proposal', error: 'extraction_error',
+      message: 'The proposal could not be processed. Try /from-scope with an explicit scope.' });
+  }
+
+  // "no scope extracted" is a normal, actionable ok:false at HTTP 200 (per the contract).
+  if (!proposal.ok && proposal.error === 'no_scope_extracted') {
+    if (isTextFormat(body.format)) return sendText(res, 200, proposal.message);
+    return sendJson(res, 200, proposal);
+  }
+  // A scope that extracted but failed validation is a real client error -> 400.
+  if (!proposal.ok) {
+    if (isTextFormat(body.format)) return sendText(res, 400, proposal.message);
+    return sendJson(res, 400, proposal);
+  }
+
+  if (isTruthy(body.price)) {
+    const { provider: pricer } = selectPricingProvider(process.env);
+    proposal.pricing = await priceScopeTakeoff(proposal.section_takeoffs, {
+      provider: pricer,
+      dataset: DATASET,
+      tier: body.tier,
+      markupPct: body.markupPct,
+      laborPct: body.laborPct,
+      laborCost: body.laborCost,
+      budget_total: body.budget_total,
+      budget_sections: body.budget_sections,
+    });
+  }
+
+  const { section_takeoffs, ...publicProposal } = proposal;
+
+  if (isHtmlFormat(body.format)) return sendHtml(res, 200, renderTakeoffHtml(publicProposal));
+  if (isTextFormat(body.format)) {
+    let text = renderTakeoffText(publicProposal);
+    if (publicProposal.pricing) text += '\n' + renderPricingText(publicProposal.pricing);
+    return sendText(res, 200, text);
+  }
+  return sendJson(res, 200, publicProposal);
 }
 
 // ─── server ──────────────────────────────────────────────────────────────────
@@ -247,6 +358,22 @@ const server = http.createServer(async (req, res) => {
       try { body = await readJsonBody(req); }
       catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
       return await handleTakeoff(res, { ...body });
+    }
+
+    // v2 multi-section scope (POST only — sections[] doesn't map cleanly to a query string).
+    if (req.method === 'POST' && path === '/material-takeoff/from-scope') {
+      let body;
+      try { body = await readJsonBody(req); }
+      catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+      return await handleScopeTakeoff(res, { ...body });
+    }
+
+    // v2 from a free-text proposal (POST only).
+    if (req.method === 'POST' && path === '/material-takeoff/from-proposal') {
+      let body;
+      try { body = await readJsonBody(req, 256 * 1024); }   // proposals can be large
+      catch (e) { return sendJson(res, 400, { ok: false, error: e.message }); }
+      return await handleProposalTakeoff(res, { ...body });
     }
 
     return sendJson(res, 404, { ok: false, error: 'not_found',

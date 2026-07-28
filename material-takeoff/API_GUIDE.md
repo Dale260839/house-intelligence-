@@ -2,9 +2,10 @@
 
 **Base URL:** `https://house-intelligence-production-f7f6.up.railway.app`
 
-Give it a kitchen's scope + size, get back an **order-ready material list** — quantities that
-already include standard waste factors, with the raw measurement and waste % shown so the math
-is auditable. JSON in / JSON out, **CORS enabled** (callable from the browser). No API key.
+Give it a project's scope + size (kitchen remodel, bathroom remodel, or flooring), get back an
+**order-ready material list** — quantities that already include standard waste factors, with the raw
+measurement and waste % shown so the math is auditable. Add `price=true` for live Home Depot pricing +
+a profit layout. JSON in / JSON out, **CORS enabled** (callable from the browser). No API key.
 
 > Sibling of the House Intelligence API (`/scope`, `/rows`), deployed as a separate service from
 > the same repo. **Supported project types: `kitchen_remodel`, `bathroom_remodel`, `flooring_only`.**
@@ -12,19 +13,19 @@ is auditable. JSON in / JSON out, **CORS enabled** (callable from the browser). 
 
 ---
 
-## ⚠️ Current status — read first
+## ✅ Current status — read first
 
-- ✅ **Quantities are LIVE and stable.** `POST /material-takeoff` reliably returns the full material
-  list + rough-in checklist. **Build the core UI against this now** — it won't change.
-- 🟡 **Pricing (`price=true`) — response contract is FINAL; provider being activated.** BigBox (the
-  original Home Depot price source) had a multi-day platform outage, so we switched to **SerpApi**,
-  which is **verified working end-to-end** (real prices flowing). It goes live the moment the SerpApi
-  key is set on the server. Until then, a `price=true` call still returns **HTTP 200 with the full
-  quantities**, but the `pricing` block comes back `{ "ok": false, "reason": "pricing_unavailable" }`.
-- 👉 **What this means for you:** build the pricing UI **defensively** — always render the quantities,
-  and render the pricing/profit block **only when `data.pricing?.ok === true`**; otherwise show a
-  graceful "pricing unavailable" state. **No frontend change will be needed when pricing turns back
-  on** — the shape in §4b is already the final one. See the pricing-aware example in §6.
+- **Everything below is LIVE in production and verified.** Three project types (`kitchen_remodel`,
+  `bathroom_remodel`, `flooring_only`), live Home Depot pricing, and per-client rate limiting are all
+  deployed.
+- **Pricing (`price=true`)** runs on **SerpApi's Home Depot engine** and returns real product prices
+  end-to-end (matched to a per-tier search term, so it's a budgetary estimate — never a quote).
+- 👉 **Pricing is opt-in and independent of quantities** — a `price=true` call always returns HTTP 200
+  with the full quantities; only `pricing.ok` reflects whether prices came through (a provider hiccup
+  or an unmatched line never fails the request). **Render the pricing/profit block only when
+  `data.pricing?.ok === true`, and degrade gracefully otherwise.** See the pricing-aware example in §6.
+- A quick way to see it all: open **`/demo`** in a browser (the BuildSuite integration demo, served by
+  the API itself).
 
 ---
 
@@ -67,15 +68,19 @@ needs a provider key configured **on the server**, not sent by the client).
 |---|---|
 | `GET /material-takeoff/project-types` | Supported project types + the required/optional input fields (types, defaults, units). Use this to **render a form dynamically.** |
 | `POST /material-takeoff` | The main call. Body `{ projectType, kitchenSqft, ...optional }` → full takeoff. |
-| `GET /material-takeoff?projectType=...&kitchenSqft=...` | Same as POST, query-driven (handy for a browser/link). |
-| `GET /health` | Liveness probe → `{"status":"ok"}`. |
-| `GET /` | API index + endpoint list. |
+| `GET /material-takeoff?projectType=...&<size>=...` | Same as POST, query-driven (handy for a browser/link). |
+| `POST /material-takeoff/from-scope` | **v2.** A whole job as a `sections[]` array (kitchen + bath + floor in one call). Merges into one takeoff; `project_type: "composite"` when >1. See **§4c**. |
+| `POST /material-takeoff/from-proposal` | **v2.** A free-text proposal (`proposal_markdown`) → an extracted scope → a takeoff, with provenance (`extracted_scope`, per-line `source_quote`/`confidence`). See **§4d**. |
+| `GET /demo` | The BuildSuite integration demo UI (served by the API — same-origin, no CORS). |
+| `GET /health` | Liveness probe → `{"status":"ok"}` (rate-limit exempt). |
+| `GET /` | API index (reports `pricing_enabled`, `rate_limit`). |
 
 Add `&format=text` (GET) or `"format":"text"` (POST) to any takeoff call for a rendered text
-block instead of JSON.
+block instead of JSON — or **`format=html`** (a.k.a. `print`/`pdf`) for a **print-ready sheet the
+browser saves as a PDF** (Ctrl/⌘-P → Save as PDF). See **§4e**.
 
 Add `price=true` to any takeoff call to attach **live Home Depot pricing + a profit layout**
-(see §4b). Requires `HOMEDEPOT_API_KEY` on the server.
+(see §4b). **Live in prod via SerpApi** (needs `HOMEDEPOT_API_KEY` on the server).
 
 ---
 
@@ -212,18 +217,23 @@ this type. Labor defaults to **60%** of materials here (vs 100% for full remodel
 ### D. Add-on groups (opt-in — extra scope beyond the core material list)
 
 Each toggle adds its own material line(s) to `materials`. **All default to `false`**, so turning none
-on gives exactly the same takeoff as before. Available on **both** project types.
+on gives exactly the same takeoff as before. Available on **all three** project types.
 
 | Toggle | Adds line(s) | How it's derived |
 |---|---|---|
-| `includeDemolition` | `demolition_dumpster` | floor area × debris rate (kitchen 0.08, bathroom 0.12 cu yd/sqft) → whole dumpsters |
+| `includeDemolition` | `demolition_dumpster` | floor area × debris rate (kitchen 0.08, bathroom 0.12, flooring 0.03 cu yd/sqft) → whole dumpsters |
 | `includeSubfloor` | `subfloor` | floor area +10% waste → 4×8 panels |
 | `includePaint` | `primer` + `paint` | drywall surface × coats ÷ ~350 sqft per gal (bathroom: **dry walls only**); `paintCoats` sets topcoats (default 2) |
 | `includeTrim` | `baseboard` | perimeter − 3 ft per opening, +10% → 16 ft sticks |
 | `includeHardware` | `cabinet_hardware` | cabinet LF (kitchen) / vanity LF (bathroom) × 0.9 pulls per LF |
+| `includeSiteProtection` **(v2)** | `floor_protection`, `plastic_sheeting`, `masking_tape`, `dust_barrier`, `hepa_filter` | dust-control + surface protection, all **area-derived** (floor area → protection/sheeting/filters; openings → dust barriers) |
 
 Add-on lines carry the same `raw` / `order_qty` / `basis` fields as core lines and are **priced** like
 any other line when `price=true`.
+
+> In the **v2** `from-scope` / `from-proposal` endpoints you switch these on per section with an
+> **`add_ons` array** instead of the booleans: `["demolition","subfloor","paint","trim","hardware","site_protection"]`
+> (§4c). The booleans and the array are the same switches under the hood.
 
 > Dumpster/haul-away pricing varies hugely by locality — treat `demolition_dumpster` cost as a rough
 > placeholder and use a local quote.
@@ -334,15 +344,17 @@ Add `price=true` and the takeoff gains a **`pricing`** block: a **live Home Depo
 for each material line at a chosen **quality tier**, and a **profit layout** (materials + labor →
 cost → markup → client price → profit + margin).
 
-> **Home Depot has no official pricing API.** Live prices come from a third-party service
-> (SerpApi Home Depot, BigBox, …) via a `HOMEDEPOT_API_KEY` set on the server. **Without a working
-> key/provider, pricing is unavailable** — the takeoff still returns quantities, and `pricing` comes
-> back `{ "ok": false, "reason": "pricing_unavailable" }`. There is no baked price catalog.
+> **Home Depot has no official pricing API.** Live prices come from a third-party service — in prod,
+> **SerpApi's Home Depot engine** — via a `HOMEDEPOT_API_KEY` set on the server. **Provider status:
+> live and working in production.** There is no baked price catalog: if the key/provider is ever
+> unavailable, the takeoff still returns quantities and `pricing` comes back
+> `{ "ok": false, "reason": "pricing_unavailable" }` — so keep rendering pricing defensively.
 >
-> **Provider status:** switched to **SerpApi** (verified working end-to-end) after BigBox's outage —
-> it activates when the SerpApi key is set on the server. Until then, `price=true` returns an
-> unavailable `pricing` block. Treat pricing as optional and degrade gracefully — the response shape
-> below is final regardless of which provider is behind it.
+> Prices are matched to a **per-tier search term, not your exact SKU**, so treat them as a budgetary
+> estimate. To keep results honest, the matcher **rejects bulk/pallet-price outliers** (it compares
+> each result against the median of the result set) — this prevents a stray pallet SKU from inflating
+> a line. Providing a **pack size** (§3.A) makes tile/flooring price per box, which is the most
+> accurate path.
 
 **Pricing parameters** are in §3.C (`price`, `tier`, `markupPct`, `laborPct` / `laborCost`).
 
@@ -413,6 +425,139 @@ curl -X POST https://house-intelligence-production-f7f6.up.railway.app/material-
 
 ---
 
+## 4c. Multi-section scope — `POST /material-takeoff/from-scope` (v2)
+
+Send a **whole job** as a `sections[]` array — a kitchen *and* a bath *and* a floor in one call —
+and get back **one merged takeoff**. Every material line is stamped with the `section_id` it came
+from, and pricing (opt-in) costs the **whole scope once**: one labor line, one profit layout.
+
+> This does **not** change `POST /material-takeoff` — that single-section endpoint is untouched.
+> `from-scope` is additive.
+
+**Request body**
+
+```jsonc
+{
+  "sections": [
+    { "section_id": "kitchen",              // optional; else derived from label, else section-N
+      "label": "Main Kitchen",              // optional, human label
+      "project_type": "kitchen_remodel",    // required — one of the §1 enum
+      "inputs": { "kitchenSqft": 220 },     // the §3.A inputs for that type
+      "add_ons": ["demolition","paint","site_protection"],  // optional — §3.D as an array
+      "budget_hint": 22000 },               // optional — this section's MATERIALS budget ($), for the fallback (§4d)
+    { "label": "Hall Bath", "project_type": "bathroom_remodel", "inputs": { "bathroomSqft": 60 } }
+  ],
+  "price": true, "tier": "better", "markupPct": 20, "laborPct": 100,   // optional pricing (§3.C) — applies to the WHOLE scope
+  "budget_total": 40000,                    // optional — job-wide materials budget
+  "budget_sections": [{ "label": "Kitchen", "amount": 22000 }],       // optional — per-section budgets by label
+  "location": { "city": "Tacoma", "state": "WA" }                     // optional, echoed back
+}
+```
+
+**Response** — the same shape as a single takeoff, plus:
+
+| Field | Type | What it is |
+|---|---|---|
+| `project_type` | string | `"composite"` when >1 section, else the single type. |
+| `source_type` | string | `"scope"` (vs `"manual"` on the single endpoint, `"proposal"` on §4d). |
+| `sections` | array | Per-section meta: `section_id`, `label`, `project_type`, `summary`, `material_count`, `budget_hint`. |
+| `materials[]` | array | **All sections merged.** Every line carries **`section_id`** (the new v2 field) plus the usual line fields. |
+| `derived_by_section` | object | `{ [section_id]: derived }` — the geometry per section. |
+| `fixtures_checklist` | object | Merged plumbing/electrical; each entry carries its `section_id`. |
+| `pricing.sections` | array | *(when `price=true`)* per-section cost breakdown: `materials_cost`, `priced`, `budget_estimated`, `unpriced`. |
+| `pricing.lines[].section_id` | string | Which section each priced line belongs to. |
+| `pricing.lines[].price_source` | enum | `homedepot_live` \| `mock` \| `proposal_budget` (see §4d). |
+
+A bad section fails the call with a **400** whose message names the section
+(`"Section 2 (Hall Bath) [bathroom_remodel]: Missing required field ..."`). Empty `sections` → 400.
+
+```bash
+curl -X POST https://house-intelligence-production-f7f6.up.railway.app/material-takeoff/from-scope \
+  -H "Content-Type: application/json" \
+  -d '{"sections":[{"label":"Kitchen","project_type":"kitchen_remodel","inputs":{"kitchenSqft":200}},
+                   {"label":"Bath","project_type":"bathroom_remodel","inputs":{"bathroomSqft":60}}],
+       "price":true,"tier":"better"}'
+```
+
+---
+
+## 4d. From a proposal — `POST /material-takeoff/from-proposal` (v2)
+
+Give it a **free-text proposal** (markdown) and it extracts a build scope, then runs the same
+deterministic takeoff — with **provenance** so you can show *why* each line is there.
+
+**Extraction is behind a provider seam.** With `EXTRACTION_API_KEY` set on the server it uses an
+**LLM** (structured output, temperature 0, **cached by proposal hash** so identical re-runs are free
+and stable). Without a key it falls back to a **deterministic heuristic extractor** — so the endpoint
+works out of the box; the LLM just makes extraction smarter.
+
+**Request body**
+
+```jsonc
+{
+  "proposal_markdown": "## Kitchen\nRemodel the 220 sqft kitchen. Demo and paint. Add a pot filler.\n\n## Master Bath\nNew 90 sqft bath with a walk-in shower.",
+  "budget_total": 45000,                 // optional — feeds the budget fallback + hints
+  "budget_sections": [{ "label": "Kitchen", "amount": 22000 }],   // optional
+  "project_type": "kitchen_remodel",     // optional hint
+  "price": true, "tier": "better"        // optional pricing (§3.C)
+}
+```
+
+**Response** — everything a `from-scope` response has, plus:
+
+| Field | Type | What it is |
+|---|---|---|
+| `source_type` | string | `"proposal"`. |
+| `extracted_scope` | object | `{ sections:[…], notes:[…] }` — the scope the extractor produced (each section carries its `section_id`, `source_quote`, `confidence`). Show it as "what we understood." |
+| `extraction_source` | string | `"llm"` or `"heuristic"`. |
+| `materials[].source_quote` | string\|null | The proposal text a line traces back to. |
+| `materials[].confidence` | enum\|null | `stated` (a number was in the text) \| `inferred` \| `assumed` (we defaulted it). Prefer stated; flag assumed. |
+
+**No scope found is not an error.** A proposal with no recognizable scope returns **HTTP 200** with
+`{ "ok": false, "error": "no_scope_extracted", "source_type": "proposal", "extracted_scope": {...} }` —
+handle it as an empty result, not a failure. (A malformed *extracted* scope is a 400.)
+
+**Long-tail items & remove/reinstall.** Items the ruleset can't derive from geometry (a pot filler, a
+range hood) come through as **passthrough** material lines — `type: "passthrough"`, `calculation:
+"estimated"`, carrying their `source_quote`. **Remove-and-reinstall of the same item generates no new
+material** (with a note explaining why); *replace / install new* does.
+
+### Budget-derived pricing fallback (U3)
+
+When a live price can't be matched for a line, it no longer silently drops out of the total (which
+understated the job). If the section has a `budget_hint` (or a matching `budget_sections` entry), the
+remaining budget is spread across the unmatched lines and they're tagged **`price_source:
+"proposal_budget"`** + `estimated: true`. Totals always reconcile: `materials + labor = total_cost`,
+`price − total_cost = profit`. No budget → the line stays in `unpriced_lines` (honest, not invented).
+
+---
+
+## 4e. Print-ready export — `format=html` (v2)
+
+Add **`format=html`** (aliases `print`, `pdf`) to **any** takeoff call — single, `from-scope`, or
+`from-proposal` — to get a **self-contained, print-optimised HTML sheet** (section grouping, pricing,
+profit layout, provenance). It's served as `text/html`; open it and **Ctrl/⌘-P → Save as PDF**.
+
+> We deliberately **do not** run a server-side PDF engine (pdfkit/puppeteer) — that would break the
+> service's zero-dependency guarantee. The browser owns the paper; the API owns a clean render. A
+> BuildSuite frontend can also style its own export off the JSON.
+
+---
+
+## 4f. Plan gating & the pricing pipeline
+
+- **The API always returns the full payload.** Plan gating (blur/teaser/truncation for a free tier)
+  is a **BuildSuite server-side concern** — do it in your own layer *after* the call, never by asking
+  this API to withhold data. Keeping the API "full payload always" keeps it simple and cacheable.
+- **`product_url` is preserved and normalized** to a public `www.homedepot.com` product page (the
+  matcher rewrites the API host), so priced lines deep-link to a buyable page.
+- **`order_discount` seam (documented, not yet applied):** volume discounts (e.g. Home Depot Pro tiers)
+  belong as an optional step **between `materials_cost` and `total_cost`** in `profit_layout`. The
+  layout leaves room for it; when it ships it will appear as an `order_discount` line without moving
+  the other fields.
+
+---
+
 ## 5. Errors
 
 Bad/missing input returns **HTTP 400** with a clear JSON message (never a 200 with garbage).
@@ -477,9 +622,8 @@ const t = await getTakeoff({
 renderMaterials(t.materials);
 renderChecklist(t.fixtures_checklist);
 
-// Render pricing ONLY when it succeeded. Right now (provider outage) this will be false —
-// your UI should show a "pricing unavailable" state, NOT an error. No code change needed
-// when pricing turns back on.
+// Render pricing ONLY when it succeeded. Pricing is live in prod, but if the provider
+// ever hiccups this is false — show a "pricing unavailable" state, NOT an error.
 if (t.pricing?.ok) {
   renderProfitLayout(t.pricing.profit_layout);      // materials/labor/cost/markup/price/profit/margin
   renderPricedLines(t.pricing.lines);               // per-line unit_price + line_cost
@@ -569,7 +713,9 @@ not a substitute for field measurement.
 - **Vendor pack-size rounding** — return tile boxes / slab counts, not just sqft.
 - **Per-surface tile layout** + a tile-size input feeding grout/thinset more precisely.
 - **Appliance inputs** (gas vs electric range, microwave type) to branch the electrical checklist.
-- **PDF / printable order sheet** for the contractor and the supplier.
+- **Printable order sheet — shipped ✅** as `format=html` (§4e): a print-ready sheet the browser saves
+  as a PDF. Next: an `order_discount` (volume-pricing) step in the profit layout (§4f).
+- **Multi-room / proposal-driven — shipped ✅** via `from-scope` (§4c) and `from-proposal` (§4d).
 
 **Platform / productionization (before charging for it inside BuildSuite)**
 - **Auth (API key) + rate limiting + request logging.**
@@ -586,7 +732,7 @@ not a substitute for field measurement.
 
 ---
 
-_Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 29 add-ons + 53 flooring +
-61 pricing + 24 rate-limit + 37 HTTP tests = 351). Standards are sourced in `material_dataset.json`
-`_meta`. House Intelligence is untouched — separate service, shared repo._
+_Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 40 add-ons + 53 flooring +
+75 pricing + 63 scope + 39 proposal + 24 rate-limit + 58 HTTP tests = **499**). Standards are sourced in
+`material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
 
