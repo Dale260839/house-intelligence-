@@ -22,6 +22,28 @@
 const round2 = n => Math.round(n * 100) / 100;   // money
 const round1 = n => Math.round(n * 10) / 10;     // percentages
 
+// PER-LINE-KEY SANITY BANDS (Issue 1 backstop): plausible ranges in each line's OWN price_unit.
+// After pack/case normalization, a price still outside its band is a unit mismatch — not a real
+// price — so the matcher drops it and the line degrades to unpriced/budget-fallback rather than
+// shipping a 5x–25x error. A dataset `min_unit_price`/`max_unit_price` on the line overrides these.
+const PRICE_BANDS = {
+  // flooring + tile — per sqft
+  flooring_lvp: { min: 1, max: 8 }, flooring_laminate: { min: 1, max: 7 },
+  flooring_engineered: { min: 3, max: 15 }, flooring_hardwood: { min: 4, max: 18 },
+  flooring_tile: { min: 1, max: 15 },
+  floor_tile: { min: 1, max: 15 }, backsplash_tile: { min: 1, max: 30 }, wall_tile: { min: 1, max: 30 },
+  // slabs — per sqft
+  countertop: { min: 8, max: 150 }, vanity_top: { min: 8, max: 150 },
+  // trim — per 16 ft stick
+  baseboard: { min: 8, max: 70 },
+  // drywall — per sheet
+  drywall_sheets: { min: 8, max: 40 },
+  // cabinets — per LF (rough budget, wide band)
+  base_cabinets: { min: 30, max: 900 }, upper_cabinets: { min: 25, max: 700 },
+  // dumpster — reject the ~$30 consumer bag matched against a 20 cu yd rental line
+  demolition_dumpster: { min: 200 },
+};
+
 // Run fn over items with at most `limit` in flight at once, preserving input order.
 // Lets the per-line price lookups overlap (a full takeoff prices in ~one slow call
 // instead of the sum of 11) without hammering a rate-limited API with all 11 at once.
@@ -97,8 +119,12 @@ async function priceMaterialLines(materials, pricingCfg, provider, tier) {
     };
     if (!cfg || !query) return { ...base, priced: false, price_source: null, reason: 'no_pricing_config' };
 
+    // Effective sanity band: the dataset line overrides the per-key default (PRICE_BANDS).
+    const band = PRICE_BANDS[m.key] || {};
+    const minPrice = (cfg.min_unit_price != null) ? cfg.min_unit_price : band.min;
+    const maxPrice = (cfg.max_unit_price != null) ? cfg.max_unit_price : band.max;
     const res = await provider.lookup({ key: m.key, query, tier, priceUnit: base.price_unit,
-      maxPrice: cfg.max_unit_price, minPrice: cfg.min_unit_price });
+      maxPrice, minPrice });
     if (!res || !res.ok) return { ...base, priced: false, price_source: null, reason: (res && res.reason) || 'lookup_failed', query };
 
     return {

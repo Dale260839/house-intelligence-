@@ -89,6 +89,39 @@ Renovate the 90 sqft master bathroom with a new walk-in shower and vanity. Insta
   check('no-scope proposal -> ok:false no_scope_extracted (no throw)', noneT.ok === false && noneT.error === 'no_scope_extracted' && noneT.source_type === 'proposal');
 
   console.log('\n========================================');
+  console.log('Integration fixes (Sing) — Scope-of-Work parsing + denylist + provenance');
+  console.log('========================================');
+
+  // Issue 3: a 12-heading proposal must yield ONLY the Scope-of-Work area — not Exclusions,
+  // Warranty, Permits, Executive Summary (which previously each produced a full takeoff).
+  const noisy = heuristicExtract({ proposal_markdown:
+    '## Executive Summary\nBathroom remodel at 123 Main St.\n\n## Scope of Work\n### 1. Bathroom\n- Install floor tile 75 sqft\n\n## Exclusions\n- Kitchen cabinetry is excluded\n- Countertops are excluded\n\n## Warranty\n- One year workmanship\n\n## Permits\n- Contractor pulls permits\n' });
+  check('Issue 3: only Scope-of-Work is a work area (1 section, not 12)', noisy.extracted_scope.sections.length === 1);
+  check('  -> it is the bathroom, 75 sqft', noisy.extracted_scope.sections[0].project_type === 'bathroom_remodel' && noisy.extracted_scope.sections[0].area_sqft === 75);
+  check('  -> Exclusions/Warranty/Permits did NOT become takeoffs', !noisy.extracted_scope.sections.some(s => /exclusion|warranty|permit|summary/i.test(s.label)));
+  check('  -> notes record the skipped non-work headings', noisy.extracted_scope.notes.some(n => /skipped/i.test(n)));
+
+  // Issue 2: phase subsections under Scope of Work collapse to one job with merged add-ons.
+  const phased = heuristicExtract({ proposal_markdown:
+    '## Scope of Work\n### 1. Site Protection & Project Management\n- protect the floors, install dust barriers\n### 2. Demolition & Disposal\n- demo the existing flooring\n### 3. Flooring Installation\n- install 1400 sqft of LVP\n- prep the subfloor\n- new baseboard trim\n' });
+  check('Issue 2: phase subsections collapse to ONE flooring section', phased.extracted_scope.sections.length === 1 && phased.extracted_scope.sections[0].project_type === 'flooring_only');
+  check('  -> area read from the flooring subsection (1400)', phased.extracted_scope.sections[0].area_sqft === 1400);
+  check('  -> add-ons merged across the phases', ['demolition', 'subfloor', 'trim', 'site_protection'].every(a => phased.extracted_scope.sections[0].add_ons.includes(a)));
+
+  // Denylist backstop (no Scope-of-Work wrapper): a "## Materials" list naming a room is dropped.
+  const denyMat = heuristicExtract({ proposal_markdown:
+    '## Kitchen\nRemodel the 180 sqft kitchen.\n## Materials\n- Kitchen cabinets\n- Quartz countertops\n' });
+  check('denylist: "## Materials" does not become a second kitchen section', denyMat.extracted_scope.sections.length === 1);
+
+  // Smaller items: scope-level id + area_sqft populated; source_quote is a body sentence; notes present.
+  const built = await buildProposalTakeoff({ proposal_markdown:
+    '## Scope of Work\n### 1. Bathroom\n- Full remodel of the 75 sqft bathroom with a walk-in shower\n' }, ds, createHeuristicExtractionProvider());
+  const exSec = built.extracted_scope.sections[0];
+  check('smaller: extracted section has a non-null id', typeof exSec.id === 'string' && exSec.id.length > 0);
+  check('smaller: extracted section has area_sqft populated (75)', exSec.area_sqft === 75);
+  check('smaller: source_quote is a body sentence, not the heading', /75 sqft|walk-in/i.test(exSec.source_quote) && exSec.source_quote !== '1. Bathroom');
+
+  console.log('\n========================================');
   console.log('U7 — LLM provider seam (injected transport, cached by proposal hash)');
   console.log('========================================');
 

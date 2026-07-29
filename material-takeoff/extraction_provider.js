@@ -78,23 +78,82 @@ const reinstallOnly = (s) =>
   /\b(remove and reinstall|reinstall(?:ing)? (?:the )?existing|r ?& ?r)\b/i.test(s) &&
   !/\b(new|replace|replacement)\b/i.test(s);
 
+// A BuildSuite proposal nests the actual work under one "## Scope of Work" heading, with a
+// `### N. Trade` subsection per phase. When present, ONLY those subsections are real work
+// areas (Issue 2) — everything else (Executive Summary, Exclusions, Warranty, Permits …) is
+// prose that must never become a takeoff (Issue 3).
+const SCOPE_RE = /\bscope\s+of\s+(?:the\s+)?work\b|\bproject\s+scope\b|\bwork\s+to\s+be\s+performed\b|^\s*scope\s*$/i;
+
+// Headings that are NOT work areas. Matched after stripping any "### 5. " numbering. This is
+// the backstop for proposals that have no "## Scope of Work" wrapper (Issue 3).
+const DENYLIST = [
+  'executive summary', 'summary', 'project summary', 'project highlights', 'highlights',
+  'overview', 'introduction', 'intro', 'timeline', 'schedule', 'pricing', 'price',
+  'cost breakdown', 'investment summary', 'investment', 'payment schedule', 'payment',
+  'exclusions', 'excluded', 'not included', 'warranty', 'permits', 'permit',
+  'site considerations', 'assumptions', 'allowances', 'client responsibilities',
+  'change order', 'change orders', 'completion criteria', 'terms', 'terms and conditions',
+  'acceptance', 'signature', 'contact', 'about us', 'about', 'notes', 'general notes',
+  'materials', 'material list', 'fixtures', 'project details', 'project management',
+];
+function isDeniedHeading(heading) {
+  const h = String(heading || '').toLowerCase().replace(/^[\s\d.)#-]+/, '').trim();
+  return DENYLIST.some(term => h === term || h.startsWith(term + ' ') || h.startsWith(term + ':') || h.startsWith(term + ' &'));
+}
+
+const unionAddons = (a, b) => Array.from(new Set([...(a || []), ...(b || [])]));
+
 const sentencesOf = (t) => String(t).split(/(?<=[.!?;])\s+|\n+/).map(s => s.trim()).filter(Boolean);
 function firstSentence(text, re) { for (const s of sentencesOf(text)) if (re.test(s)) return s; return null; }
 
-/** Split the proposal into blocks by markdown headings; heading-less text is one block. */
-function splitBlocks(md) {
+/** Parse the markdown into a flat list of heading nodes { level, title, body[] } in doc order. */
+function parseNodes(md) {
   const lines = String(md == null ? '' : md).split(/\r?\n/);
-  const blocks = [];
-  let cur = null;
+  const nodes = [];
+  let cur = { level: 0, title: '', body: [] };
   for (const ln of lines) {
-    const h = ln.match(/^\s{0,3}#{1,6}\s+(.*)$/);
-    if (h) { if (cur) blocks.push(cur); cur = { heading: h[1].trim(), body: [] }; }
-    else { if (!cur) cur = { heading: '', body: [] }; cur.body.push(ln); }
+    const h = ln.match(/^\s{0,3}(#{1,6})\s+(.*)$/);
+    if (h) { nodes.push(cur); cur = { level: h[1].length, title: h[2].trim(), body: [] }; }
+    else cur.body.push(ln);
   }
-  if (cur) blocks.push(cur);
-  return blocks
-    .map(b => ({ heading: b.heading, text: `${b.heading}\n${b.body.join('\n')}`.trim() }))
-    .filter(b => b.text);
+  nodes.push(cur);
+  return nodes.filter(n => n.level > 0 || n.body.join('').trim());
+}
+
+function nodeToBlock(n) {
+  const body = n.body.join('\n').trim();
+  return { heading: n.title, body, text: `${n.title}\n${body}`.trim() };
+}
+
+/**
+ * Choose which blocks are candidate WORK AREAS:
+ *   - If a "## Scope of Work" heading exists, ONLY its deeper subsections count — a real
+ *     BuildSuite proposal nests every trade under it as `### N. …`, and Executive Summary /
+ *     Exclusions / Warranty / Permits live OUTSIDE it (Issues 2 & 3).
+ *   - Otherwise every top-level section is a candidate (legacy); the denylist filters prose.
+ * Returns { blocks, mode: 'scope' | 'legacy' }.
+ */
+function selectBlocks(md) {
+  const nodes = parseNodes(md);
+  const scopeIdx = nodes.findIndex(n => n.level >= 1 && SCOPE_RE.test(n.title));
+  if (scopeIdx >= 0) {
+    const scope = nodes[scopeIdx];
+    const subs = [];
+    for (let i = scopeIdx + 1; i < nodes.length; i++) {
+      if (nodes[i].level <= scope.level) break;   // next sibling/parent heading ends the scope
+      subs.push(nodes[i]);
+    }
+    const src = subs.length ? subs : [scope];     // scope with no subsections -> its own body
+    // Everything at the scope's level or shallower (other than the scope heading itself) is
+    // non-scope prose — Executive Summary, Exclusions, Warranty, Permits — report it for trust.
+    const ignored = nodes
+      .filter((n, i) => i !== scopeIdx && n.level > 0 && n.level <= scope.level)
+      .map(n => n.title);
+    return { blocks: src.map(nodeToBlock), mode: 'scope', ignored };
+  }
+  const tops = nodes.filter(n => n.level >= 1);
+  const src = tops.length ? tops : nodes;         // no headings at all -> the whole doc as one block
+  return { blocks: src.map(nodeToBlock), mode: 'legacy', ignored: [] };
 }
 
 // Classify a block by the type with the MOST keyword hits (not the first match): a bathroom
@@ -109,67 +168,130 @@ function classifyBlock(text) {
   return best;
 }
 
-function extractSection(block) {
-  const rule = classifyBlock(block.text);
-  if (!rule) return null;
-
-  const inputs = {};
-  const m = block.text.match(RE_SQFT);
-  let confidence;
-  if (m) { inputs[rule.sqft] = Number(m[1].replace(/,/g, '')); confidence = 'stated'; } // prefer STATED
-  else { inputs[rule.sqft] = DEFAULT_SQFT[rule.type]; confidence = 'assumed'; }          // else assumed
-
+// Detect add-ons + long-tail passthrough items in ANY block (a room section OR a phase
+// subsection like "### Demolition"), honouring remove-and-reinstall (no new material).
+function detectExtras(text) {
   const notes = [];
   const add_ons = [];
   for (const ar of ADDON_RULES) {
-    const sent = firstSentence(block.text, ar.re);
+    const sent = firstSentence(text, ar.re);
     if (!sent) continue;
     if (reinstallOnly(sent)) { notes.push(`"${ar.addon}" is remove & reinstall — no new material added.`); continue; }
     add_ons.push(ar.addon);
   }
-
   const passthrough = [];
   for (const pr of PASSTHROUGH_RULES) {
-    const sent = firstSentence(block.text, pr.re);
+    const sent = firstSentence(text, pr.re);
     if (!sent) continue;
     if (reinstallOnly(sent)) { notes.push(`"${pr.label}" is remove & reinstall — no new item added.`); continue; }
     passthrough.push({ key: pr.key, label: pr.label, qty: 1, unit: 'ea',
       source_quote: sent, confidence: /\d/.test(sent) ? 'stated' : 'inferred' });
   }
+  return { add_ons, passthrough, notes };
+}
+
+function extractSection(block) {
+  const rule = classifyBlock(block.text);
+  if (!rule) return null;
+
+  const notes = [];
+  const m = block.text.match(RE_SQFT);
+  let area, confidence;
+  if (m) { area = Number(m[1].replace(/,/g, '')); confidence = 'stated'; }   // prefer STATED
+  else { area = DEFAULT_SQFT[rule.type]; confidence = 'assumed'; }            // else assumed (flagged post-merge)
+
+  const extras = detectExtras(block.text);
+  notes.push(...extras.notes);
+
+  // source_quote: a real sentence from the BODY (a measurement line, else a trade line, else the
+  // first body sentence) — NOT the heading — for useful provenance in the UI.
+  const source_quote = firstSentence(block.body, RE_SQFT)
+    || firstSentence(block.body, rule.re)
+    || sentencesOf(block.body)[0]
+    || block.heading || null;
 
   const section = {
     label: block.heading || rule.label,
     project_type: rule.type,
-    inputs,
-    source_quote: firstSentence(block.text, rule.re) || block.heading || null,
+    inputs: { [rule.sqft]: area },
+    area_sqft: area,
+    source_quote,
     confidence,
   };
-  if (add_ons.length) section.add_ons = add_ons;
-  if (passthrough.length) section.passthrough = passthrough;
+  if (extras.add_ons.length) section.add_ons = extras.add_ons;
+  if (extras.passthrough.length) section.passthrough = extras.passthrough;
   return { section, notes };
 }
 
-function heuristicExtract({ proposal_markdown, budget_total, budget_sections } = {}) {
-  const blocks = splitBlocks(proposal_markdown);
-  const sections = [];
-  const notes = [];
-  for (const b of blocks) {
-    const r = extractSection(b);
-    if (!r) continue;
-    sections.push(r.section);
-    notes.push(...r.notes);
+// Scope mode is one job decomposed by phase -> merge same-type room sections (union add-ons,
+// concat passthrough, prefer a stated area over an assumed one).
+function mergeRoomSections(sections) {
+  const order = [];
+  const map = new Map();
+  for (const s of sections) {
+    if (!map.has(s.project_type)) { map.set(s.project_type, s); order.push(s.project_type); continue; }
+    const t = map.get(s.project_type);
+    if (s.confidence === 'stated' && t.confidence !== 'stated') {
+      t.inputs = s.inputs; t.area_sqft = s.area_sqft; t.confidence = 'stated'; t.source_quote = s.source_quote || t.source_quote;
+    }
+    if (s.add_ons) t.add_ons = unionAddons(t.add_ons, s.add_ons);
+    if (s.passthrough) t.passthrough = [...(t.passthrough || []), ...s.passthrough];
   }
+  return order.map(k => map.get(k));
+}
+
+function heuristicExtract({ proposal_markdown, budget_total, budget_sections } = {}) {
+  const { blocks, mode, ignored } = selectBlocks(proposal_markdown);
+
+  const roomSections = [];
+  const globalAddOns = [];
+  const globalPassthrough = [];
+  const notes = [];
+  const skipped = [...(ignored || [])];   // non-scope headings ignored in scope mode
+
+  for (const b of blocks) {
+    if (isDeniedHeading(b.heading)) { skipped.push(b.heading); continue; }   // Issue 3
+    const r = extractSection(b);
+    if (r) {
+      roomSections.push(r.section);
+      notes.push(...r.notes);
+    } else {
+      // A phase/support subsection (Demolition, Site Protection, …): no room of its own, but
+      // its add-ons + long-tail items still count — apply them to the room section(s).
+      const ex = detectExtras(b.text);
+      globalAddOns.push(...ex.add_ons);
+      globalPassthrough.push(...ex.passthrough);
+      notes.push(...ex.notes);
+    }
+  }
+
+  // Scope mode is a single job decomposed by phase -> merge same-type room sections.
+  const sections = (mode === 'scope') ? mergeRoomSections(roomSections) : roomSections;
+
+  // Apply job-wide add-ons / long-tail items to the primary room section.
+  if (sections.length && (globalAddOns.length || globalPassthrough.length)) {
+    const first = sections[0];
+    if (globalAddOns.length) first.add_ons = unionAddons(first.add_ons, globalAddOns);
+    if (globalPassthrough.length) first.passthrough = [...(first.passthrough || []), ...globalPassthrough];
+  }
+
+  // Flag FINAL sections that ran on an assumed (not stated) area — only after the merge, so a
+  // phase subsection that folds into a stated section never leaves a stray "assumed" note.
+  for (const s of sections) {
+    if (s.confidence === 'assumed') notes.push(`"${s.label}": no area stated — assumed ${s.area_sqft} sqft (verify).`);
+  }
+  if (skipped.length) notes.push(`Skipped ${skipped.length} non-work heading(s): ${skipped.slice(0, 8).join(', ')}.`);
 
   if (!sections.length) {
     return { ok: false, reason: 'no_scope_extracted', source: 'heuristic',
-      notes: ['No recognizable kitchen, bathroom, or flooring scope found in the proposal.'] };
+      notes: notes.concat('No kitchen, bathroom, or flooring work area found in the proposal.') };
   }
 
-  // A heading-less blob that names more than one trade only captures the top-priority one.
-  if (blocks.length === 1) {
+  // Legacy heading-less blob that names >1 trade only captures the top-priority one.
+  if (mode === 'legacy' && blocks.length === 1) {
     const matched = TYPE_RULES.filter(r => r.re.test(blocks[0].text));
     if (matched.length > 1) {
-      notes.push(`Multiple trades detected in one block; only "${sections[0].project_type}" captured — add markdown headings (## Kitchen, ## Bathroom) or enable the LLM extractor for full multi-section.`);
+      notes.push(`Multiple trades detected in one block; only "${sections[0].project_type}" captured — add markdown headings (## Scope of Work with ### subsections) or enable the LLM extractor for full multi-section.`);
     }
   }
 

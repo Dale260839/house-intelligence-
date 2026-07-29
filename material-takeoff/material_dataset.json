@@ -399,7 +399,7 @@
           },
           "demolition_dumpster": {
             "price_unit": "dumpster", "field_estimate": true,
-            "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" },
+            "search": { "good": "20 yard dumpster rental", "better": "20 yard dumpster rental", "best": "20 yard dumpster rental" },
             "note": "Dumpster/haul-away pricing varies hugely by locality - treat as a rough placeholder and use a local quote."
           },
           "subfloor": {
@@ -601,7 +601,7 @@
           "drywall_screws": { "price_unit": "1 lb box", "search": { "good": "1-1/4 in coarse drywall screws 1 lb", "better": "1-1/4 in coarse drywall screws 5 lb", "best": "1-1/4 in fine drywall screws collated" } },
           "vanity": { "price_unit": "LF", "field_estimate": true, "search": { "good": "single sink bathroom vanity", "better": "shaker bathroom vanity with top", "best": "solid wood bathroom vanity soft close" } },
           "vanity_top": { "price_unit": "sqft", "field_estimate": true, "min_unit_price": 10, "search": { "good": "cultured marble vanity top", "better": "quartz vanity top slab", "best": "granite vanity top slab" }, "note": "min_unit_price floors out the 4x4in sample swatches these searches also return (a swatch read as $/sqft understates the top)." },
-          "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" }, "note": "Dumpster/haul-away pricing varies hugely by locality - rough placeholder; use a local quote." },
+          "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "20 yard dumpster rental", "better": "20 yard dumpster rental", "best": "20 yard dumpster rental" }, "note": "Dumpster/haul-away pricing varies hugely by locality - rough placeholder; use a local quote." },
           "subfloor": { "price_unit": "sheet", "search": { "good": "7/16 in osb sheathing 4x8", "better": "23/32 in plywood subfloor 4x8", "best": "cement board underlayment 4x8" } },
           "primer": { "price_unit": "gal", "search": { "good": "interior primer 1 gal", "better": "interior stain blocking primer 1 gal", "best": "interior bonding primer 1 gal" } },
           "paint": { "price_unit": "gal", "search": { "good": "interior latex paint 1 gal", "better": "bathroom paint 1 gal", "best": "interior premium satin paint 1 gal" } },
@@ -716,7 +716,7 @@
           "grout":               { "price_unit": "25 lb bag", "search": { "good": "sanded grout 25 lb", "better": "stain resistant sanded grout 25 lb", "best": "epoxy grout" } },
           "fasteners":           { "price_unit": "box", "search": { "good": "flooring cleats 2 in", "better": "hardwood flooring staples 2 in", "best": "stainless flooring cleats" } },
           "transitions":         { "price_unit": "ea", "search": { "good": "vinyl transition strip", "better": "wood floor transition strip", "best": "aluminum floor transition strip" } },
-          "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "bagster dumpster in a bag", "better": "bagster dumpster in a bag", "best": "bagster dumpster in a bag" }, "note": "Haul-away pricing varies by locality - rough placeholder; use a local quote." },
+          "demolition_dumpster": { "price_unit": "dumpster", "field_estimate": true, "search": { "good": "20 yard dumpster rental", "better": "20 yard dumpster rental", "best": "20 yard dumpster rental" }, "note": "Haul-away pricing varies by locality - rough placeholder; use a local quote." },
           "subfloor":            { "price_unit": "sheet", "search": { "good": "7/16 in osb sheathing 4x8", "better": "23/32 in plywood subfloor 4x8", "best": "3/4 in tongue and groove plywood subfloor" } },
           "baseboard":           { "price_unit": "16 ft stick", "search": { "good": "primed mdf baseboard molding", "better": "primed pine baseboard molding", "best": "solid wood baseboard molding" } },
           "floor_protection":     { "price_unit": "roll", "search": { "good": "builder paper floor protection", "better": "ram board floor protection", "best": "reusable floor protection roll" } },

@@ -351,10 +351,12 @@ cost → markup → client price → profit + margin).
 > `{ "ok": false, "reason": "pricing_unavailable" }` — so keep rendering pricing defensively.
 >
 > Prices are matched to a **per-tier search term, not your exact SKU**, so treat them as a budgetary
-> estimate. To keep results honest, the matcher **rejects bulk/pallet-price outliers** (it compares
-> each result against the median of the result set) — this prevents a stray pallet SKU from inflating
-> a line. Providing a **pack size** (§3.A) makes tile/flooring price per box, which is the most
-> accurate path.
+> estimate. To keep results honest the matcher (a) **normalizes case/pack pricing** — Home Depot lists
+> flooring by the case and trim by the pack, with the size in the title (e.g. "(23.95 sq ft/case)"), so
+> the listed price is divided down to the line's unit before costing; (b) **rejects bulk/pallet outliers**
+> against the result-set median; and (c) applies a **per-line sanity band** — a price still outside the
+> plausible range for that line (a unit mismatch) is dropped to `unpriced_lines` rather than shipped as a
+> 5×–25× error. Providing a **pack size** (§3.A) is still the most accurate path for tile/flooring.
 
 **Pricing parameters** are in §3.C (`price`, `tier`, `markupPct`, `laborPct` / `laborCost`).
 
@@ -733,6 +735,6 @@ not a substitute for field measurement.
 ---
 
 _Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 40 add-ons + 53 flooring +
-75 pricing + 63 scope + 39 proposal + 24 rate-limit + 58 HTTP tests = **499**). Standards are sourced in
+89 pricing + 63 scope + 50 proposal + 24 rate-limit + 58 HTTP tests = **524**). Standards are sourced in
 `material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
 

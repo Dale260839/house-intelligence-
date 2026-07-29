@@ -202,7 +202,12 @@ async function buildProposalTakeoff(body, dataset, provider) {
   const exBySid = {};
   scope.sections.forEach((meta, i) => {
     const exSec = ex.extracted_scope.sections[i] || {};
-    exSec.section_id = meta.section_id;
+    exSec.id = meta.section_id;               // scope-level id (BuildSuite reads .id)
+    exSec.section_id = meta.section_id;       // keep the existing key too (additive)
+    if (exSec.area_sqft == null && exSec.inputs) {
+      const areaKey = Object.keys(exSec.inputs).find(k => /sqft$/i.test(k));
+      if (areaKey) exSec.area_sqft = exSec.inputs[areaKey];
+    }
     exBySid[meta.section_id] = exSec;
   });
   scope.materials = scope.materials.map(m => {

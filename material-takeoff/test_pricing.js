@@ -8,7 +8,7 @@ const { buildTakeoff, loadDataset } = require('./takeoff_engine.js');
 const { priceTakeoff, renderPricingText } = require('./pricing_engine.js');
 const {
   createMockPricingProvider, createHomeDepotProvider, selectPricingProvider,
-  parsePrice, extractProduct, buildSearchUrl, MOCK_UNIT_PRICES,
+  parsePrice, normalizePackPrice, extractProduct, buildSearchUrl, MOCK_UNIT_PRICES,
 } = require('./pricing_provider.js');
 
 const ds = loadDataset();
@@ -189,6 +189,60 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
     ds.project_types.kitchen_remodel.pricing.lines.countertop.min_unit_price >= 5);
   check('dataset: bathroom vanity_top has a min_unit_price floor',
     ds.project_types.bathroom_remodel.pricing.lines.vanity_top.min_unit_price >= 5);
+
+  console.log('\n========================================');
+  console.log('PACK / CASE NORMALIZATION + per-line bands (Issue 1)');
+  console.log('========================================');
+
+  // Home Depot lists flooring by the case / trim by the pack, with the size in the title.
+  check('LVP case price -> per sqft (42.87 / 23.95 = 1.79)',
+    normalizePackPrice(42.87, 'sqft', 'Edwards Oak Click Lock LVP Flooring (23.95 sqft/case)') === 1.79);
+  check('tile case price -> per sqft (58.14 / 15.6 = 3.73)',
+    normalizePackPrice(58.14, 'sqft', 'Porcelain Tile 12 in. x 24 in. (15.6 sq. ft./case)') === 3.73);
+  check('baseboard 5-pack / 80 LF -> per 16 ft stick (128 / 5 = 25.6)',
+    normalizePackPrice(128, '16 ft stick', 'Primed Pine Baseboard Moulding (5-Pack - 80 Total Linear Feet)') === 25.6);
+  check('generic "Case of 12" -> /12', normalizePackPrice(60, 'ea', 'Cabinet Pulls (Case of 12)') === 5);
+  check('generic "(6-Pack)" -> /6', normalizePackPrice(30, 'roll', 'Painters Tape (6-Pack)') === 5);
+  check('already per-sqft (no case stated) is unchanged', normalizePackPrice(2.98, 'sqft', 'Ceramic Floor Tile 12 in. x 12 in.') === 2.98);
+  check('no title / no unit -> unchanged (safe no-op)', normalizePackPrice(9.99, '', null) === 9.99 && normalizePackPrice(9.99, 'sqft', null) === 9.99);
+
+  // extractProduct normalizes + applies the band end to end.
+  const lvp = extractProduct({ products: [
+    { title: 'Edwards Oak LVP (23.95 sqft/case)', price: 42.87 },
+    { title: 'Budget LVP (19.6 sqft/case)', price: 33.0 },
+  ] }, { priceUnit: 'sqft', minPrice: 1, maxPrice: 8 });
+  check('extractProduct: case LVP normalized into band (~1.79)', Math.abs(lvp.price - 1.79) < 0.01);
+  check('  -> 1498 sqft line is ~$2,681 not ~$64k', Math.round(lvp.price * 1498) < 3000);
+
+  // An out-of-band price that can't be pack-parsed is dropped (Sing: prefer unpriced over a 24x error).
+  const oob = extractProduct({ products: [{ title: 'Mystery Flooring Bundle', price: 189.0 }] },
+    { priceUnit: 'sqft', minPrice: 1, maxPrice: 8 });
+  check('unparseable out-of-band price -> null (degrade to unpriced)', oob === null);
+
+  // The dumpster consumer bag matched against a 20 cu yd rental line -> floor rejects it.
+  const bag = extractProduct({ products: [{ title: 'Dumpster in a Bag (Holds 3,300 lb.)', price: 29.95 }] },
+    { priceUnit: '20 cu yd dumpster', minPrice: 200 });
+  check('dumpster consumer bag rejected by floor (the 12x-under guard)', bag === null);
+  check('dataset: dumpster search retuned off the consumer bag',
+    /rental/i.test(ds.project_types.flooring_only.pricing.lines.demolition_dumpster.search.better));
+
+  // Live provider path: a case-priced LVP normalized via the threaded priceUnit + band.
+  const caseFetch = async () => ({ ok: true, status: 200,
+    async json() { return { products: [{ title: 'LVP (23.95 sqft/case)', price: 42.87 }] }; }, async text() { return ''; } });
+  const liveLvp = createHomeDepotProvider({ apiKey: 'K', fetchImpl: caseFetch });
+  const lr = await liveLvp.lookup({ query: 'lvp', priceUnit: 'sqft', minPrice: 1, maxPrice: 8 });
+  check('live provider normalizes a case price to per-sqft', lr.ok === true && Math.abs(lr.unit_price - 1.79) < 0.01);
+
+  // Full priceTakeoff path exercises PRICE_BANDS -> lookup(priceUnit,min,max) -> normalize.
+  const smartFetch = async (u) => {
+    const q = decodeURIComponent((String(u).match(/[?&]q=([^&]+)/) || [])[1] || '');
+    const products = /vinyl|lvp/i.test(q) ? [{ title: 'LVP (23.95 sqft/case)', price: 42.87 }] : [{ title: q, price: 20 }];
+    return { ok: true, status: 200, async json() { return { products }; }, async text() { return ''; } };
+  };
+  const flTk = buildTakeoff({ projectType: 'flooring_only', floorSqft: 1400 }, ds);
+  const flPr = await priceTakeoff(flTk, { provider: createHomeDepotProvider({ apiKey: 'K', fetchImpl: smartFetch }), dataset: ds, tier: 'better' });
+  const lvpLine = flPr.lines.find(l => l.key === 'flooring_lvp');
+  check('priceTakeoff: 1400 sqft LVP line is sane (< $3k, not $64k)', lvpLine && lvpLine.unit_price < 8 && lvpLine.line_cost < 3000);
 
   const url = buildSearchUrl('', 'SECRET', 'thinset mortar 50 lb');
   check('buildSearchUrl default = SerpApi home_depot + q + api_key', /serpapi\.com/.test(url) && /q=thinset%20mortar%2050%20lb/.test(url) && /api_key=SECRET/.test(url));

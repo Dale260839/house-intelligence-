@@ -25,6 +25,8 @@
 const https = require('https');
 const { URL } = require('url');
 
+const round2 = n => Math.round(n * 100) / 100;
+
 // ─── zero-dependency HTTPS JSON client (same contract as supabase_store.js) ────
 function httpsRequestJson(url, { method = 'GET', headers = {}, body = null, timeoutMs = 10000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -79,6 +81,49 @@ function parsePrice(v) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+// PACK / CASE NORMALIZATION (Issue 1): Home Depot lists flooring by the CASE, trim by the
+// PACK, tile by the box — and the LISTED price is the whole-package price, with the pack size
+// stated in the product title. Read as a per-unit price it over-charges by the pack size (a
+// $42.87 "(23.95 sq ft/case)" LVP read as $/sqft is 24× too high; a $128 "(5-Pack — 80 Total
+// Linear Feet)" baseboard read as $/stick is 5× too high). Parse the pack size out of the title
+// and divide down to the LINE's unit. If nothing parses, the price is returned unchanged and the
+// per-line sanity band (min/max_unit_price) is the backstop. Never returns 0/NaN.
+function normalizePackPrice(price, priceUnit, title) {
+  if (!(price > 0) || !title || !priceUnit) return price;
+  const t = String(title);
+  const unit = String(priceUnit).toLowerCase();
+
+  // 1) area per package -> per sqft.  "(23.95 sq. ft./case)", "23.95 sqft / case", "covers 23.95 sq ft"
+  if (/sq\s*\.?\s*ft|sqft/.test(unit)) {
+    const m = t.match(/([\d.]+)\s*sq\.?\s*ft\.?\s*(?:\/|per\s+)?\s*(?:case|carton|box|pallet|bundle|pack|piece|pc)/i)
+           || t.match(/covers?\s*(?:up to\s*)?([\d.]+)\s*sq\.?\s*ft/i);
+    if (m) { const per = parseFloat(m[1]); if (per > 0) return round2(price / per); }
+    return price;
+  }
+
+  // 2) linear-foot total -> per LF or per N-ft stick.  "(80 Total Linear Feet)"
+  if (/\blf\b|linear|ft\s*stick|stick|molding|moulding|trim|baseboard/.test(unit)) {
+    const lfm = t.match(/([\d.]+)\s*(?:total\s*)?(?:linear\s*(?:feet|ft)|lin\.?\s*ft|lf)\b/i);
+    if (lfm) {
+      const totalLF = parseFloat(lfm[1]);
+      if (totalLF > 0) {
+        const stick = unit.match(/(\d+(?:\.\d+)?)\s*ft/);
+        if (stick) return round2(price / (totalLF / parseFloat(stick[1])));  // per stick
+        return round2(price / totalLF);                                       // per LF
+      }
+    }
+    // else fall through to the generic count rule
+  }
+
+  // 3) generic count per package.  "Case of 12", "Pack of 6", "(5-Pack)", "2-Pack", "(6-Piece)"
+  const pk = t.match(/(?:case of|pack of|box of|set of|bundle of)\s*(\d+)/i)
+          || t.match(/\((\d+)\s*[-\s]?(?:pack|piece|pieces|count|ct|pk)\b/i)
+          || t.match(/\b(\d+)\s*[-\s]?(?:pack|pieces)\b/i);
+  if (pk) { const n = Number(pk[1]); if (n > 1) return round2(price / n); }
+
+  return price;
+}
+
 // Make a matched product URL publicly usable. SerpApi returns Home Depot links on the
 // `apionline.homedepot.com` API host; the customer-facing product page is on `www`.
 function normalizeProductUrl(url) {
@@ -114,38 +159,39 @@ function extractProduct(json, opts = {}) {
     (json.product ? [json.product] : null) ||
     [json];
 
+  const titleOf = (c) => c.title || c.name || c.product_title || null;
+
+  // Normalize each candidate's LISTED price to the line's unit (pack/case aware — Issue 1)
+  // BEFORE any guard runs, so the guards compare real per-unit prices, not case prices.
   let priced = [];
   for (const c of candidates) {
     if (!c) continue;
-    const price = parsePrice(c.price ?? c.current_price ?? c.pricing);
-    if (price != null) priced.push({ c, price });
+    const raw = parsePrice(c.price ?? c.current_price ?? c.pricing);
+    if (raw == null) continue;
+    priced.push({ c, price: normalizePackPrice(raw, opts.priceUnit, titleOf(c)) });
   }
   if (!priced.length) return null;
 
-  // LOW-SIDE FLOOR: drop anything below the configured floor BEFORE the median is taken,
-  // so a swatch-heavy result set can't drag the median down and legitimise a swatch. If
-  // NOTHING clears the floor, report no match (null) rather than invent a too-low price —
-  // an un-priced line degrades to the budget fallback, which beats a wrong cheap number.
-  if (opts.minPrice > 0) {
-    const kept = priced.filter(x => x.price >= opts.minPrice);
-    if (!kept.length) return null;
-    priced = kept;
-  }
+  // PER-LINE SANITY BAND (Issue 1): a unit mismatch that slips past pack-parsing (a $4 swatch
+  // below the floor, a case/pallet above the ceiling) is caught here on the NORMALIZED price.
+  // Prefer NO price (-> unpriced_lines / budget fallback) over a wildly wrong one.
+  if (opts.minPrice > 0) priced = priced.filter(x => x.price >= opts.minPrice);
+  if (opts.maxPrice > 0) priced = priced.filter(x => x.price <= opts.maxPrice);
+  if (!priced.length) return null;
 
-  // Median of everything the search returned = a robust "what does this cost?" signal.
+  // Median outlier guard (self-tuning; still catches bulk SKUs on lines with no explicit band).
   const sorted = priced.map(x => x.price).slice().sort((a, b) => a - b);
   const median = sorted[Math.floor(sorted.length / 2)];
-  let cap = median * (opts.outlierFactor || 12);
-  if (opts.maxPrice > 0) cap = Math.min(cap, opts.maxPrice);
+  const cap = median * (opts.outlierFactor || 12);
 
-  // First non-outlier; if everything is an outlier (e.g. a single-result search) fall
-  // back to the cheapest — a unit price beats a pallet price.
+  // First non-outlier; if everything is an outlier (e.g. a single-result search) fall back to
+  // the cheapest — a unit price beats a pallet price.
   const pick = priced.find(x => x.price <= cap)
             || priced.slice().sort((a, b) => a.price - b.price)[0];
   const c = pick.c;
   return {
     price: pick.price,
-    title: c.title || c.name || c.product_title || null,
+    title: titleOf(c),
     url: normalizeProductUrl(c.link || c.url || c.product_url || c.offer_url || null),
   };
 }
@@ -188,11 +234,11 @@ function createHomeDepotProvider(opts = {}) {
   return {
     id: 'homedepot_live',
     source: 'homedepot_live',
-    async lookup({ query, minPrice, maxPrice }) {
+    async lookup({ query, minPrice, maxPrice, priceUnit }) {
       if (!query) return { ok: false, reason: 'no_search_term' };
-      // Key the cache on the guards too: the same term with a different floor/ceiling is a
-      // different question and must not return a cached answer from the other config.
-      const cacheKey = `${query}|${minPrice || ''}|${maxPrice || ''}`;
+      // Key the cache on the guards + unit too: the same term with a different floor/ceiling or
+      // price unit is a different question and must not return a cached answer from another config.
+      const cacheKey = `${query}|${minPrice || ''}|${maxPrice || ''}|${priceUnit || ''}`;
       if (cache.has(cacheKey)) return cache.get(cacheKey);
 
       let result;
@@ -211,7 +257,7 @@ function createHomeDepotProvider(opts = {}) {
         } else {
           let json;
           try { json = await res.json(); } catch { json = null; }
-          const product = extractProduct(json, { minPrice, maxPrice });
+          const product = extractProduct(json, { minPrice, maxPrice, priceUnit });
           result = product
             ? { ok: true, unit_price: product.price, currency: 'USD',
                 product_title: product.title, product_url: product.url, source: 'homedepot_live' }
@@ -318,6 +364,7 @@ function selectPricingProvider(env = process.env) {
 module.exports = {
   httpsRequestJson,
   parsePrice,
+  normalizePackPrice,
   extractProduct,
   buildSearchUrl,
   createHomeDepotProvider,

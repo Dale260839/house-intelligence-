@@ -134,7 +134,7 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
 | A12 | Bad price / failed extraction never crashes a request | ✅ MET |
 | A13 | PDF export path | ✅ MET as **`format=html`** print-ready export (U8). Server-side binary PDF intentionally **not** built (would break zero-dep). |
 
-**Test count: 499 passing, 0 failing** (`npm test`).
+**Test count: 524 passing, 0 failing** (`npm test`).
 
 ---
 
@@ -149,6 +149,14 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
 - **U7** — `POST /from-proposal` + `extraction_provider.js` (LLM seam + heuristic + hash cache);
   remove/reinstall + stated-over-inferred handling; `no_scope_extracted` → 200.
 - **U8** — `format=html` print-ready export (`pdf_export.js`), zero-dependency.
+- **Integration fixes (Sing, 2026-07-29)** — (1) **pack/case-size price normalization** + per-line
+  sanity bands: parses "(23.95 sqft/case)", "(5-Pack — 80 Total Linear Feet)", "Case of N" etc. out of
+  the product title and divides to the line's unit, fixing 5×–25× over-pricing on flooring/trim; the
+  dumpster consumer-bag mismatch is floored out. (2) **`## Scope of Work` → `### N.` subsections** are
+  parsed as sections (phase subsections merge into one job with their add-ons). (3) **Non-work headings**
+  (Executive Summary, Exclusions, Warranty, Permits, …) are denylisted so they never become takeoffs.
+  (4) `extracted_scope` `id` / `area_sqft` / `source_quote` (a body sentence) / `notes` are populated.
+  **JSON response shape unchanged** — values corrected, fields added additively.
 
 ---
 
@@ -158,8 +166,10 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
   is wired behind the seam but needs a key + the ownership decision (BuildSuite vs this service). This
   is the single gating call for full proposal fidelity. See `MATERIAL_TAKEOFF_V2_GAP_ANALYSIS.md`.
 - **`order_discount`** — seam documented, not yet applied to the profit layout.
-- **Heuristic multi-section** needs markdown headings; a heading-less blob mixing trades captures only
-  the top-priority one (an LLM handles the rest). Fine as a fallback.
+- **Heuristic multi-section** now parses `## Scope of Work` → `### N.` subsections (BuildSuite's
+  format) and denylists non-work headings; a heading-less blob that mixes trades still captures only the
+  top-priority one (the LLM handles arbitrary formats — the Q1 decision above).
 - **New room types** from the huddle (drywall-only, bedroom, living room) — each is a small new builder
   + dataset block; the composite aggregator already handles them once added.
-- **Not deployed yet** — this change is staged for review; v2 endpoints go live on the next deploy.
+- **Deployed** — v2 endpoints are LIVE in production (verified by BuildSuite integration testing);
+  the 2026-07-29 integration fixes above ship on the next deploy.
