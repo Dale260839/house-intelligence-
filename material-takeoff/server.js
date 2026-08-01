@@ -230,6 +230,8 @@ async function handleScopeTakeoff(res, body) {
       laborCost: body.laborCost,
       budget_total: body.budget_total,
       budget_sections: body.budget_sections,
+      materials_budget: body.materials_budget,
+      materialsShare: body.materialsShare,
     });
   }
 
@@ -283,6 +285,8 @@ async function handleProposalTakeoff(res, body) {
       laborCost: body.laborCost,
       budget_total: body.budget_total,
       budget_sections: body.budget_sections,
+      materials_budget: body.materials_budget,
+      materialsShare: body.materialsShare,
     });
   }
 

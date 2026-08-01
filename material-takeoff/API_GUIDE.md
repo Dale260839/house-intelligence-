@@ -524,13 +524,36 @@ range hood) come through as **passthrough** material lines — `type: "passthrou
 "estimated"`, carrying their `source_quote`. **Remove-and-reinstall of the same item generates no new
 material** (with a note explaining why); *replace / install new* does.
 
-### Budget-derived pricing fallback (U3)
+### Budget-derived pricing fallback + budget UNITS
 
-When a live price can't be matched for a line, it no longer silently drops out of the total (which
-understated the job). If the section has a `budget_hint` (or a matching `budget_sections` entry), the
-remaining budget is spread across the unmatched lines and they're tagged **`price_source:
-"proposal_budget"`** + `estimated: true`. Totals always reconcile: `materials + labor = total_cost`,
-`price − total_cost = profit`. No budget → the line stays in `unpriced_lines` (honest, not invented).
+When a live price can't be matched for a line, it no longer silently drops out of the total. The
+section's **materials budget** is spread across the unmatched lines, tagged **`price_source:
+"proposal_budget"`** + `estimated: true`. Totals always reconcile (`materials + labor = total_cost`,
+`price − total_cost = profit`). No budget → the line stays in `unpriced_lines` (honest, not invented).
+
+**Budget units — important.** `budget_total` / `budget_sections` are the **client-facing price** (they
+include labor, overhead, and profit), so the API multiplies them by a **materials share** (default
+**0.35**, override with `materialsShare`) before seeding the materials-only fallback — otherwise
+materials would absorb the whole job. If you'd rather send the already-split figure, use
+**`materials_budget`** (a materials number, applied as-is). A from-scope per-section `budget_hint` is
+also a materials figure and bypasses the share.
+
+| Field | Unit | Treatment |
+|---|---|---|
+| `budget_total` | client price ($) | × `materialsShare` (0.35 default) |
+| `budget_sections[].amount` | client price ($) | × `materialsShare`, matched to a section by trade |
+| `materials_budget` | materials ($) | used as-is |
+| `sections[].budget_hint` (from-scope) | materials ($) | used as-is |
+
+### Pricing reliability (retry + one degrade signal)
+
+SerpApi is flaky under concurrency, so transient lookups (network/timeout/rate-limit) are **retried**
+with backoff. The `pricing` block also reports **`priced_count`** / **`unpriced_count`**, and
+**`pricing.ok` flips to `false`** with `reason: "pricing_degraded"` when more than ~25% of lines fail —
+so you can hide the profit layout off one signal instead of walking two arrays. `demolition_dumpster`
+comes back `unpriced` with the distinct reason **`not_retail_sku`** (render it as a "local quote" line).
+Proposal responses also carry a top-level **`assumptions[]`** flagging any section whose area was
+assumed (not stated).
 
 ---
 
@@ -735,6 +758,6 @@ not a substitute for field measurement.
 ---
 
 _Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 40 add-ons + 53 flooring +
-89 pricing + 63 scope + 50 proposal + 24 rate-limit + 58 HTTP tests = **524**). Standards are sourced in
+95 pricing + 71 scope + 59 proposal + 24 rate-limit + 58 HTTP tests = **547**). Standards are sourced in
 `material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
 

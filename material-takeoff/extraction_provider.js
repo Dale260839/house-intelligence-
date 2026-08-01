@@ -49,7 +49,15 @@ const TYPE_RULES = [
   { type: 'flooring_only',    label: 'Flooring', sqft: 'floorSqft',
     re: /\b(floor(?:ing)?|lvp|laminate|hardwood|luxury vinyl)\b/i },
 ];
-const DEFAULT_SQFT = { kitchen_remodel: 200, bathroom_remodel: 100, flooring_only: 300 };
+// Assumed area when a subsection states none. Bathrooms are small — a real full bath is ~40-60 sqft,
+// so 100 roughly doubled every derived quantity; 50 is a truer default. Still flagged (confidence
+// 'assumed' + a response-level note) so the caller knows it's a guess.
+const DEFAULT_SQFT = { kitchen_remodel: 200, bathroom_remodel: 50, flooring_only: 300 };
+
+// Human labels for a merged section's name (Issue 3) — a merged job is named by its resolved trade,
+// not the first subsection's heading.
+const TYPE_LABELS = { kitchen_remodel: 'Kitchen Remodel', bathroom_remodel: 'Bathroom Remodel', flooring_only: 'Flooring' };
+const typeLabel = k => TYPE_LABELS[k] || String(k).replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
 // add_on -> the phrases that switch it on.
 const ADDON_RULES = [
@@ -125,6 +133,20 @@ function nodeToBlock(n) {
   return { heading: n.title, body, text: `${n.title}\n${body}`.trim() };
 }
 
+/** Parse "- **Title**: body" bullets (BuildSuite's proposal SOW format) into subsection blocks. */
+function splitBoldBullets(bodyText) {
+  const blocks = [];
+  const re = /^\s*[-*+]\s+\*\*(.+?)\*\*\s*:?\s*(.*)$/;
+  for (const line of String(bodyText == null ? '' : bodyText).split(/\r?\n/)) {
+    const m = line.match(re);
+    if (!m) continue;
+    const heading = m[1].trim();
+    const body = m[2].trim();
+    blocks.push({ heading, body, text: `${heading}\n${body}`.trim() });
+  }
+  return blocks;
+}
+
 /**
  * Choose which blocks are candidate WORK AREAS:
  *   - If a "## Scope of Work" heading exists, ONLY its deeper subsections count — a real
@@ -143,13 +165,17 @@ function selectBlocks(md) {
       if (nodes[i].level <= scope.level) break;   // next sibling/parent heading ends the scope
       subs.push(nodes[i]);
     }
-    const src = subs.length ? subs : [scope];     // scope with no subsections -> its own body
     // Everything at the scope's level or shallower (other than the scope heading itself) is
     // non-scope prose — Executive Summary, Exclusions, Warranty, Permits — report it for trust.
     const ignored = nodes
       .filter((n, i) => i !== scopeIdx && n.level > 0 && n.level <= scope.level)
       .map(n => n.title);
-    return { blocks: src.map(nodeToBlock), mode: 'scope', ignored };
+    if (subs.length) return { blocks: subs.map(nodeToBlock), mode: 'scope', ignored };
+    // No ### subsections — BuildSuite's proposal renderer emits "- **Title**: body" bullets. Treat
+    // each bolded bullet as a subsection so a multi-trade proposal doesn't collapse into one block.
+    const bullets = splitBoldBullets(scope.body.join('\n'));
+    const blocks = bullets.length ? bullets : [nodeToBlock(scope)];
+    return { blocks, mode: 'scope', ignored };
   }
   const tops = nodes.filter(n => n.level >= 1);
   const src = tops.length ? tops : nodes;         // no headings at all -> the whole doc as one block
@@ -166,6 +192,25 @@ function classifyBlock(text) {
     if (hits > bestScore) { best = rule; bestScore = hits; }
   }
   return best;
+}
+
+// A STANDALONE flooring job names a flooring PRODUCT or a flooring-specific action. A bathroom or
+// kitchen phase that merely says "floor tile" is part of THAT room, not a separate flooring job.
+const STRONG_FLOORING = /\b(lvp|laminate|hardwood|vinyl plank|luxury vinyl|engineered (?:wood|hardwood|flooring)|new flooring|flooring installation|refinish (?:the )?floor)\b/i;
+
+// The dominant ROOM type across a scope's subsections (kitchen/bathroom only) — used to fold weakly
+// classified "floor tile" phases into the room they belong to.
+function dominantRoomType(blocks) {
+  const score = { kitchen_remodel: 0, bathroom_remodel: 0 };
+  for (const b of blocks) {
+    for (const type of Object.keys(score)) {
+      const rule = TYPE_RULES.find(r => r.type === type);
+      score[type] += (b.text.match(new RegExp(rule.re.source, 'gi')) || []).length;
+    }
+  }
+  if (score.bathroom_remodel > score.kitchen_remodel) return 'bathroom_remodel';
+  if (score.kitchen_remodel > 0) return 'kitchen_remodel';
+  return null;
 }
 
 // Detect add-ons + long-tail passthrough items in ANY block (a room section OR a phase
@@ -190,8 +235,8 @@ function detectExtras(text) {
   return { add_ons, passthrough, notes };
 }
 
-function extractSection(block) {
-  const rule = classifyBlock(block.text);
+function extractSection(block, forceType) {
+  const rule = forceType ? TYPE_RULES.find(r => r.type === forceType) : classifyBlock(block.text);
   if (!rule) return null;
 
   const notes = [];
@@ -228,7 +273,9 @@ function extractSection(block) {
 function mergeRoomSections(sections) {
   const order = [];
   const map = new Map();
+  const counts = {};
   for (const s of sections) {
+    counts[s.project_type] = (counts[s.project_type] || 0) + 1;
     if (!map.has(s.project_type)) { map.set(s.project_type, s); order.push(s.project_type); continue; }
     const t = map.get(s.project_type);
     if (s.confidence === 'stated' && t.confidence !== 'stated') {
@@ -237,7 +284,13 @@ function mergeRoomSections(sections) {
     if (s.add_ons) t.add_ons = unionAddons(t.add_ons, s.add_ons);
     if (s.passthrough) t.passthrough = [...(t.passthrough || []), ...s.passthrough];
   }
-  return order.map(k => map.get(k));
+  // A merged section (built from >1 subsection) is named by its resolved trade, NOT the first
+  // subsection's heading (which is usually "Pre-Construction / Site Protection" — Issue 3).
+  return order.map(k => {
+    const sec = map.get(k);
+    if (counts[k] > 1) sec.label = `${typeLabel(k)} — merged from ${counts[k]} scope subsections`;
+    return sec;
+  });
 }
 
 function heuristicExtract({ proposal_markdown, budget_total, budget_sections } = {}) {
@@ -249,9 +302,17 @@ function heuristicExtract({ proposal_markdown, budget_total, budget_sections } =
   const notes = [];
   const skipped = [...(ignored || [])];   // non-scope headings ignored in scope mode
 
+  // In a scope, a phase that classifies as flooring only via a generic "floor tile" (no LVP /
+  // hardwood / "flooring installation" signal) belongs to the dominant room, not a separate job —
+  // e.g. a bathroom's "Backer Board, Waterproofing & Tile" phase is bathroom, not flooring.
+  const dominant = (mode === 'scope') ? dominantRoomType(blocks.filter(b => !isDeniedHeading(b.heading))) : null;
+
   for (const b of blocks) {
     if (isDeniedHeading(b.heading)) { skipped.push(b.heading); continue; }   // Issue 3
-    const r = extractSection(b);
+    const cls = classifyBlock(b.text);
+    const forceType = (dominant && cls && cls.type === 'flooring_only' && !STRONG_FLOORING.test(b.text))
+      ? dominant : undefined;
+    const r = extractSection(b, forceType);
     if (r) {
       roomSections.push(r.section);
       notes.push(...r.notes);
@@ -295,21 +356,9 @@ function heuristicExtract({ proposal_markdown, budget_total, budget_sections } =
     }
   }
 
-  assignBudgets(sections, budget_total, budget_sections);
+  // Budget handling (client-price → materials share, per-section allocation) lives in the pricing
+  // layer (priceScopeTakeoff), which knows the unit of each budget source. Extraction stays unit-free.
   return { ok: true, source: 'heuristic', extracted_scope: { sections, notes } };
-}
-
-/** Attach a per-section materials budget: match budget_sections by keyword, else the total for a lone section. */
-function assignBudgets(sections, budgetTotal, budgetSections) {
-  const bs = Array.isArray(budgetSections) ? budgetSections : [];
-  for (const s of sections) {
-    const trade = s.project_type.split('_')[0];                 // kitchen | bathroom | flooring
-    const match = bs.find(b => b && typeof b.label === 'string' && b.label.toLowerCase().includes(trade));
-    if (match && Number(match.amount) > 0) s.budget_hint = Number(match.amount);
-  }
-  if (sections.length === 1 && sections[0].budget_hint == null && Number(budgetTotal) > 0) {
-    sections[0].budget_hint = Number(budgetTotal);
-  }
 }
 
 function createHeuristicExtractionProvider() {

@@ -90,10 +90,14 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   const noProvider = await priceTakeoff(takeoff(), { provider: null, dataset: ds });
   check('no provider -> ok:false pricing_unavailable', noProvider.ok === false && noProvider.reason === 'pricing_unavailable');
 
-  // A provider that never matches -> every line unpriced, materials_cost 0, but ok:true.
+  // A provider that never matches -> every line unpriced. Too large a fail share flips ok:false
+  // (pricing_degraded) so consumers degrade off one signal, but the payload is still returned.
   const emptyProvider = { id: 'empty', source: 'empty', async lookup() { return { ok: false, reason: 'no_match' }; } };
   const allUnpriced = await priceTakeoff(takeoff(), { provider: emptyProvider, dataset: ds });
-  check('all-miss provider -> ok:true but fully_priced:false', allUnpriced.ok === true && allUnpriced.fully_priced === false);
+  check('all-miss provider -> ok:false pricing_degraded, fully_priced:false',
+    allUnpriced.ok === false && allUnpriced.reason === 'pricing_degraded' && allUnpriced.fully_priced === false);
+  check('all-miss -> priced_count 0, unpriced_count = all lines',
+    allUnpriced.priced_count === 0 && allUnpriced.unpriced_count === takeoff().materials.length);
   check('all-miss -> materials_cost 0 and all lines listed unpriced', allUnpriced.profit_layout.materials_cost === 0 && allUnpriced.unpriced_lines.length === takeoff().materials.length);
 
   console.log('\n========================================');
@@ -269,14 +273,45 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   await cached.lookup({ query: 'same' }); await cached.lookup({ query: 'same' });
   check('live provider caches repeat queries (1 fetch for 2 lookups)', calls === 1);
 
-  // error mapping: 429 -> rate_limited, non-2xx never throws.
-  const rl = createHomeDepotProvider({ apiKey: 'K', fetchImpl: async () => ({ ok: false, status: 429, async json() { return null; }, async text() { return ''; } }) });
+  // error mapping: 429 -> rate_limited, non-2xx never throws. (retryBackoffMs:1 keeps the test fast.)
+  const rl = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, fetchImpl: async () => ({ ok: false, status: 429, async json() { return null; }, async text() { return ''; } }) });
   const rlRes = await rl.lookup({ query: 'x' });
   check('HTTP 429 -> ok:false rate_limited (no throw)', rlRes.ok === false && rlRes.reason === 'rate_limited');
 
-  const boom = createHomeDepotProvider({ apiKey: 'K', fetchImpl: async () => { throw new Error('socket hang up'); } });
+  const boom = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, fetchImpl: async () => { throw new Error('socket hang up'); } });
   const boomRes = await boom.lookup({ query: 'x' });
   check('transport throw -> ok:false network_error (no throw)', boomRes.ok === false && boomRes.reason === 'network_error');
+
+  console.log('\n========================================');
+  console.log('RETRY — transient failures are retried (Issue 1: pricing stability)');
+  console.log('========================================');
+
+  // A transient failure that clears on a later attempt should still price the line.
+  let tries = 0;
+  const flaky = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, fetchImpl: async () => {
+    tries++;
+    if (tries < 3) throw new Error('socket hang up');            // fail twice, then succeed
+    return { ok: true, status: 200, async json() { return { products: [{ price: 12.5 }] }; }, async text() { return ''; } };
+  } });
+  const flakyRes = await flaky.lookup({ query: 'x' });
+  check('transient lookup is retried, then succeeds', flakyRes.ok === true && flakyRes.unit_price === 12.5 && tries === 3);
+
+  let tries2 = 0;
+  const deadNet = createHomeDepotProvider({ apiKey: 'K', maxRetries: 2, retryBackoffMs: 1, fetchImpl: async () => { tries2++; throw new Error('ECONNRESET'); } });
+  const deadRes = await deadNet.lookup({ query: 'x' });
+  check('exhausted retries -> network_error after maxRetries+1 attempts', deadRes.ok === false && deadRes.reason === 'network_error' && tries2 === 3);
+
+  let tries3 = 0;
+  const noMatchProv = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, fetchImpl: async () => { tries3++; return { ok: true, status: 200, async json() { return { products: [] }; }, async text() { return ''; } }; } });
+  await noMatchProv.lookup({ query: 'x' });
+  check('a genuine no_match is NOT retried (1 attempt)', tries3 === 1);
+
+  // not_retail_sku: the dumpster line is skipped (no live call) with a distinct reason.
+  const dumpTk = buildTakeoff({ projectType: 'kitchen_remodel', kitchenSqft: 200, includeDemolition: true }, ds);
+  const dumpPr = await priceTakeoff(dumpTk, { provider: createMockPricingProvider(), dataset: ds, tier: 'better' });
+  const dumpLine = dumpPr.unpriced_lines.find(u => u.key === 'demolition_dumpster');
+  check('demolition_dumpster -> unpriced with reason not_retail_sku', !!dumpLine && dumpLine.reason === 'not_retail_sku');
+  check('  -> priced_count/unpriced_count reported on the pricing block', typeof dumpPr.priced_count === 'number' && typeof dumpPr.unpriced_count === 'number');
 
   console.log('\n========================================');
   console.log('PROVIDER SELECTION (mirrors selectStore)');

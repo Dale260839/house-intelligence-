@@ -221,12 +221,25 @@ function buildSearchUrl(baseUrl, apiKey, query) {
  *   opts.apiUrl    — HOMEDEPOT_API_URL (optional; SerpApi Home Depot by default)
  *   opts.fetchImpl — inject a fake transport in tests
  */
+// A transient failure is worth retrying (the line will likely succeed on the next attempt);
+// a genuine no_match / auth_error / 4xx is not. SerpApi is flaky under concurrency, and a
+// dropped line silently understates the total — so we retry the transient ones.
+function isTransientLookup(r) {
+  const x = r && r.reason;
+  return x === 'network_error' || x === 'rate_limited' || x === 'request_timeout'
+      || x === 'http_error' || /^http_5\d\d$/.test(x || '');
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
 function createHomeDepotProvider(opts = {}) {
   const apiKey = opts.apiKey || process.env.HOMEDEPOT_API_KEY || '';
   const apiUrl = opts.apiUrl || process.env.HOMEDEPOT_API_URL || '';
   if (!apiKey) throw new Error('createHomeDepotProvider: missing HOMEDEPOT_API_KEY.');
   const fetchImpl = opts.fetchImpl || httpsRequestJson;
   const timeoutMs = opts.timeoutMs || 10000;
+  const maxRetries = opts.maxRetries != null ? opts.maxRetries
+    : (Number(process.env.PRICING_MAX_RETRIES) || 2);
+  const retryBackoffMs = opts.retryBackoffMs != null ? opts.retryBackoffMs : 300;
 
   // Within one takeoff the same query can repeat; cache so we bill one call per query.
   const cache = new Map();
@@ -241,32 +254,40 @@ function createHomeDepotProvider(opts = {}) {
       const cacheKey = `${query}|${minPrice || ''}|${maxPrice || ''}|${priceUnit || ''}`;
       if (cache.has(cacheKey)) return cache.get(cacheKey);
 
-      let result;
-      try {
-        const res = await fetchImpl(buildSearchUrl(apiUrl, apiKey, query), {
-          method: 'GET',
-          headers: { Accept: 'application/json' },
-          timeoutMs,
-        });
-        if (!res || !res.ok) {
-          const status = res && res.status;
-          const reason = (status === 401 || status === 403) ? 'auth_error'
-                       : status === 429 ? 'rate_limited'
-                       : 'http_' + (status || 'error');
-          result = { ok: false, reason, status };
-        } else {
+      const attempt = async () => {
+        try {
+          const res = await fetchImpl(buildSearchUrl(apiUrl, apiKey, query), {
+            method: 'GET',
+            headers: { Accept: 'application/json' },
+            timeoutMs,
+          });
+          if (!res || !res.ok) {
+            const status = res && res.status;
+            const reason = (status === 401 || status === 403) ? 'auth_error'
+                         : status === 429 ? 'rate_limited'
+                         : 'http_' + (status || 'error');
+            return { ok: false, reason, status };
+          }
           let json;
           try { json = await res.json(); } catch { json = null; }
           const product = extractProduct(json, { minPrice, maxPrice, priceUnit });
-          result = product
+          return product
             ? { ok: true, unit_price: product.price, currency: 'USD',
                 product_title: product.title, product_url: product.url, source: 'homedepot_live' }
             : { ok: false, reason: 'no_match' };
+        } catch (err) {
+          return { ok: false, reason: 'network_error', detail: String((err && err.message) || err) };
         }
-      } catch (err) {
-        result = { ok: false, reason: 'network_error', detail: String((err && err.message) || err) };
+      };
+
+      // Retry transient failures with linear backoff; a non-transient result returns immediately.
+      let result;
+      for (let i = 0; i <= maxRetries; i++) {
+        result = await attempt();
+        if (result.ok || !isTransientLookup(result)) break;
+        if (i < maxRetries) await sleep(retryBackoffMs * (i + 1));
       }
-      cache.set(cacheKey, result);
+      if (result.ok || !isTransientLookup(result)) cache.set(cacheKey, result); // don't pin a transient miss
       return result;
     },
   };

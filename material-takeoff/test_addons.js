@@ -100,9 +100,11 @@ const ADDONS = ['demolition_dumpster', 'subfloor', 'primer', 'paint', 'baseboard
   console.log('========================================');
   const mock = createMockPricingProvider();
   const pr = await priceTakeoff(kAll, { provider: mock, dataset: ds, tier: 'better' });
-  check('priced takeoff with add-ons is fully priced', pr.ok === true && pr.fully_priced === true);
-  check('  all 17 lines priced', pr.lines.length === 17);
-  check('  every add-on line has a cost', ADDONS.every(k => {
+  // The dumpster is not a retail SKU -> intentionally unpriced (a distinct reason), so 16 of 17 price.
+  check('priced takeoff with add-ons is reliable (16 of 17; dumpster not_retail_sku)',
+    pr.ok === true && pr.priced_count === 16 && pr.unpriced_lines.some(u => u.key === 'demolition_dumpster' && u.reason === 'not_retail_sku'));
+  check('  16 retail lines priced', pr.lines.length === 16);
+  check('  every retail add-on line has a cost', ADDONS.filter(k => k !== 'demolition_dumpster').every(k => {
     const l = pr.lines.find(x => x.key === k);
     return l && l.line_cost > 0;
   }));

@@ -1,165 +1,199 @@
 # Material Takeoff — Current State (session context)
 
 _A load-me-first context file for a Claude chat session picking up the Material Takeoff work._
-**Last updated: 2026-07-11.** Repo: `c:\Users\John\ProgrammingProjects\house-intelligence-`
-(GitHub `Dale260839/house-intelligence-`, branch `main`).
+**Last updated: 2026-07-30.** Repo: `c:\Users\John\ProgrammingProjects\house-intelligence-`
+(GitHub `Dale260839/house-intelligence-`, branch `main`; Railway auto-deploys `main`).
 
 ---
 
 ## TL;DR — where things stand
 
-- **Quantity engine:** ✅ built, tested, **live in production** for a long time.
-- **Pricing + profit layer:** ✅ built, tested (150 tests), **committed & pushed**, and **deployed**
-  to prod. Uses **live BigBox (Home Depot) pricing**, lookups parallelized.
-- **🟡 ACTIVE BLOCKER (BigBox side, not ours):** prod + local both return `http_400` because BigBox is
-  still **"preparing" zipcode 98006** — a one-time, per-zipcode provisioning step. Config and code are
-  correct; we're just waiting for BigBox to flip it `preparing → ready`. See §2.
-- **No code or config changes are pending.** Prod config was fixed (the earlier `auth_error` is gone).
-  Once BigBox finishes preparing 98006, pricing works with zero further changes.
+- **v2 is built, tested, and LIVE in production.** Three endpoints, three project types, live pricing,
+  proposal extraction, and a print-ready export. **524 tests, 0 failing.**
+- **BuildSuite (Sing) has the API integrated into the frontend** — the takeoff panel is live on the
+  proposal page and running end-to-end. His side is essentially done.
+- **No blockers.** The old BigBox "preparing zipcode" blocker is gone — pricing moved to **SerpApi**
+  (search-term matched, no per-zipcode provisioning).
+- **Most recent work:** the v2 build (multi-section + proposal + extraction + HTML export) followed by
+  a round of fixes from Sing's real-proposal integration testing (pack/case pricing, Scope-of-Work
+  parsing, heading denylist). All shipped.
+- **Open decision (not code):** who owns/pays for the LLM extraction (see §8). Everything else has a
+  clear next step in §9.
 
 ---
 
 ## 1. What it is
 
-`material-takeoff/` — sibling of House Intelligence in the same repo, separate Railway service.
-Give it a kitchen-remodel scope + size → an **order-ready material list** (quantities with waste
-factors + auditable math) + a plumbing/electrical rough-in checklist. **v1: `kitchen_remodel` only.**
+`material-takeoff/` — sibling of House Intelligence in the same repo, a **separate Railway service**,
+zero runtime dependencies (Node core only), deterministic engine with provider seams for anything
+external (pricing, proposal extraction).
 
-Opt-in pricing layer (`price=true`): prices each material line at a **quality tier**
-(good/better/best) from **live Home Depot pricing via BigBox**, adds a **labor line**, and produces a
-**profit layout** (materials → labor → cost → markup% → client price → profit + implied margin%).
+Give it a renovation scope + size → an **order-ready material list** (quantities with waste baked in +
+auditable math) + a rough-in checklist, with **opt-in live pricing + a profit layout**.
+
+**Three ways in:**
+
+| Endpoint | Input | `source_type` | For |
+|---|---|---|---|
+| `POST /material-takeoff` | one `{ projectType, ...inputs }` | `manual` | a single room (unchanged from v1) |
+| `POST /material-takeoff/from-scope` | `{ sections:[…] }` | `scope` | a whole job in one call → merged, `project_type:"composite"` when >1 |
+| `POST /material-takeoff/from-proposal` | `{ proposal_markdown }` | `proposal` | free-text proposal → extracted scope → takeoff, with provenance |
+
+All accept opt-in pricing (`price=true` + `tier`/`markupPct`/`laborPct`/`laborCost`) and render formats
+`format=text` and `format=html` (print-ready → save as PDF). Also `GET /material-takeoff/project-types`
+(form contract), `GET /demo`, `GET /health`.
+
+**Project types:** `kitchen_remodel`, `bathroom_remodel`, `flooring_only`.
+**Add-ons (per section):** `demolition`, `subfloor`, `paint`, `trim`, `hardware`, `site_protection`.
 
 **Prod URL:** `https://house-intelligence-production-f7f6.up.railway.app`
 (House Intelligence is a *separate* service at `https://house-intelligence-production.up.railway.app`.)
 
 ---
 
-## 2. 🟡 The active blocker: BigBox is still "preparing" the zipcode
+## 2. Architecture / files (`material-takeoff/`)
 
-**Current symptom:** prod + local both return `pricing.ok:true`, `source:"homedepot_live"`, but every
-line is `unpriced` with `http_400`. Raw BigBox message:
-> *"Zipcode '98006' is set up on your account but is **not yet ready to service requests**... it takes
-> a couple minutes before they are available."*
-
-**What this means:** BigBox provisions each newly-added zipcode before it can serve requests (HD prices
-are store-specific, so it caches that store first). This is a **one-time, per-zipcode** step — it does
-**not** happen per request, and won't recur for 98006 once ready. Just waiting on BigBox.
-
-**Everything on our side is DONE and validated:**
-- ✅ Key valid (`/account` → `success:true`, Free plan, 100 credits, 0 used).
-- ✅ Zipcode **98006** configured by Chris (`/zipcodes` → status `preparing`).
-- ✅ Railway vars corrected (prod flipped from `auth_error` → `http_400`, proving it now hits BigBox
-  correctly with the zip). `HOMEDEPOT_API_KEY` = raw key; `HOMEDEPOT_API_URL` = BigBox template with
-  `customer_zipcode=98006`.
-- ✅ Code correct + parallelized — **local and prod produce identical `http_400`**, i.e. nothing left
-  to change on our end.
-
-**History (resolved):** the earlier `auth_error` was a misconfigured Railway var (whole URL pasted into
-`HOMEDEPOT_API_KEY`, no `HOMEDEPOT_API_URL` → hit SerpApi with a bogus key). Fixed.
-
-**REMAINING ACTION: none on our side — wait for BigBox.** Chris can watch
-https://app.bigboxapi.com/zipcodes for 98006 to flip `preparing → ready` (contact BigBox support if it
-stalls). Then it just works.
-
-**Verify command (run once BigBox is ready):**
-```
-curl "https://house-intelligence-production-f7f6.up.railway.app/material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&price=true&format=text"
-```
-Expect 11 priced lines + a full profit layout.
-
----
-
-## 3. BigBox account facts (as of 2026-07-11)
-- Provider: **BigBox API** (Traject Data) — purpose-built for Home Depot.
-- Account: **Chris Carr**, `home@alliance4contractors.com`, **Free** plan.
-- Credits: **100/month, 0 used**, reset 2026-08-13. **~1 credit per material line → ~9 full priced
-  takeoffs** before the free tier is exhausted (size up for real use).
-- Zipcodes: **limit 1** — **98006 (Bellevue, WA) configured by Chris**, currently `status: preparing`
-  (one-time BigBox provisioning; ← the current wait). Switching stores means removing this one first.
-- API key: `CCC6…D067` (exposed in screenshots this session — **recommend rotating** once live).
-  Real value lives in Railway env + the BigBox dashboard.
-- Endpoints used: `/request?type=search&search_term=…&customer_zipcode=…`, `/account`, `/zipcodes`.
-
----
-
-## 4. Architecture / files (`material-takeoff/`)
 | File | Role |
 |---|---|
-| `material_dataset.json` | Quantity rates/waste + the **`pricing`** block (tiers, per-line HD search terms, defaults, disclaimers). |
-| `takeoff_engine.js` | Quantity engine (unchanged by pricing — deterministic, sync). |
-| `pricing_provider.js` | Live BigBox/SerpApi provider over a zero-dep https shim + a `mock` provider + `selectPricingProvider(env)`. Provider-agnostic parser (`extractProduct`/`parsePrice`). |
-| `pricing_engine.js` | `priceTakeoff()` — tier selection, per-line cost, labor, markup+margin layout. **Lookups run concurrently (cap 5) via `mapLimit`.** |
-| `server.js` | HTTP API; opt-in `price=true` (async). |
-| `smoke_pricing.js` | Live-verification tool (`npm run smoke:pricing`). Runs vs mock with `PRICING_MOCK=1`. |
-| `test_engine.js` / `test_pricing.js` / `test_server.js` | 57 / 60 / 33 tests = **150 total**. |
+| `material_dataset.json` | Quantity rates/waste + geometry + the `pricing` block (tiers, per-line HD search terms, defaults). Add a project type = a block here + a builder. |
+| `takeoff_engine.js` | Single-type dispatcher; validates inputs, stamps `source_type` + per-line `section_id`. Deterministic, sync. |
+| `builders/*.js` | Per-type quantity derivation (`kitchen_remodel`, `bathroom_remodel`, `flooring_only`) + shared `addons.js` (incl. area-derived `site_protection`). |
+| `line_builders.js` | Shared line constructors: made-to-measure / waste-factor / coverage / pack_round / `passthroughLine` (long-tail items). |
+| `scope_engine.js` | `buildScopeTakeoff` (merge sections) + `buildProposalTakeoff` (extract → scope). add_ons[]→toggle mapping, section-id gen. |
+| `pricing_engine.js` | `priceTakeoff` (single) + `priceScopeTakeoff` (multi) + budget fallback + `PRICE_BANDS` (per-line sanity bands). One labor line + one profit layout. Lookups concurrent (cap 5). |
+| `pricing_provider.js` | Live SerpApi/BigBox provider over a zero-dep https shim + `mock` + `selectPricingProvider(env)`. `extractProduct` (pallet outlier + swatch floor guards) + `normalizePackPrice` (case/pack → per-unit). |
+| `extraction_provider.js` | Proposal → scope. **Heuristic** (deterministic: Scope-of-Work parsing, denylist, remove/reinstall, confidence) + **LLM seam** (temp 0, structured, cached by proposal hash) + `selectExtractionProvider(env)`. |
+| `pdf_export.js` | Zero-dep print-ready HTML render (`format=html`). |
+| `server.js` | Node-core HTTP API; the routes above; CORS; rate limiter; opt-in `price=true` (async). |
+| `rate_limiter.js` | Per-client-IP fixed window (default 120/60s), 429 + Retry-After + X-RateLimit-* headers, `/health` exempt. |
+| `test_*.js` | engine 59 · bathroom 46 · room-shape 19 · pack-size 23 · add-ons 40 · flooring 53 · pricing 89 · scope 63 · proposal 50 · rate-limit 24 · HTTP 58 = **524**. |
 
-**Pricing flow:** `buildTakeoff` (quantities) → `priceTakeoff(takeoff, {provider, tier, markupPct, laborPct/laborCost})` → per line `provider.lookup({query})` builds the BigBox URL from `HOMEDEPOT_API_URL` (or SerpApi default), parses the first product price, `line_cost = unit_price × order_qty` → labor + markup/margin layout. Failures degrade to `unpriced_lines`; a bad price NEVER fails the request.
+---
+
+## 3. Pricing model (opt-in, `price=true`)
+
+Live prices from **SerpApi's Home Depot engine** via `HOMEDEPOT_API_KEY` (no baked catalog — live only;
+no key → `pricing.ok:false, reason:"pricing_unavailable"` while quantities still return). Per line:
+
+1. Search term per quality tier (good/better/best) → `provider.lookup`.
+2. **Pack/case normalization** — HD lists flooring by the case, trim by the pack, with the size in the
+   title (`(23.95 sqft/case)`, `(5-Pack — 80 Total Linear Feet)`). `normalizePackPrice` divides to the
+   line's unit before costing (fixes 5×–25× over-pricing).
+3. **Guards:** reject pallet/bulk outliers (median×12), reject sample swatches (per-line floor), and a
+   **per-line sanity band** (`PRICE_BANDS`, dataset `min/max_unit_price` overrides) — anything still
+   out of range is a unit mismatch → dropped to `unpriced_lines`, never a wrong number.
+4. **Budget fallback:** an unmatched line, when the section has a `budget_hint`/`budget_sections`, gets
+   a budget-derived estimate tagged `price_source:"proposal_budget"` (tops up when budget ≥ priced).
+5. `price_source` per line: `homedepot_live | mock | proposal_budget`.
+6. Profit layout: materials + labor → total_cost → markup% → client price → profit + implied margin%.
+   `order_discount` (volume tiers) is a **documented seam**, not yet applied.
+
+---
+
+## 4. Extraction model (`from-proposal`)
+
+Behind `selectExtractionProvider(env)`:
+- **No key → deterministic heuristic** (the default; always available). Parses `## Scope of Work` →
+  `### N.` subsections as work areas, merges phase subsections into one job with their add-ons,
+  denylists non-work headings (Executive Summary / Exclusions / Warranty / Permits / …), honours
+  remove-and-reinstall (no new item), prefers stated quantities (`confidence: stated|inferred|assumed`).
+- **`EXTRACTION_API_KEY` / `ANTHROPIC_API_KEY` set → LLM** (structured output, temp 0, cached by
+  proposal hash). Handles arbitrary formats beyond the Scope-of-Work template.
+- Response adds `extracted_scope { sections[], notes[] }`; sections carry `id`/`area_sqft`/
+  `source_quote`/`confidence`; per-line `source_quote`/`confidence`. `no_scope_extracted` → `ok:false`
+  at HTTP 200 (never a crash).
 
 ---
 
 ## 5. Config / env (material-takeoff service)
-| Var | Purpose | Current status |
-|---|---|---|
-| `HOMEDEPOT_API_KEY` | BigBox raw key → activates live pricing. No key → `pricing_unavailable` (quantities still return). | ✅ **Set correctly** to the raw key. |
-| `HOMEDEPOT_API_URL` | Endpoint template (`{key}`/`{query}` placeholders). Default = SerpApi. For BigBox, set + include `&customer_zipcode=`. | ✅ **Set** to BigBox template with `customer_zipcode=98006`. |
-| `PRICING_MOCK` | Dev/test only — deterministic fake prices, no key/network. `0/false/no/off` = disabled. | Not set in prod (correct). |
-| `PORT` | Railway injects. | ok |
 
-Repo-root `.env.example` documents all three. There is **no baked price catalog** (live-only by design).
+| Var | Purpose | Status |
+|---|---|---|
+| `HOMEDEPOT_API_KEY` | SerpApi key → live pricing. No key → `pricing_unavailable`. | ✅ Set in Railway (SerpApi). Rotate the key exposed earlier if not already done. |
+| `HOMEDEPOT_API_URL` | Endpoint template (`{key}`/`{query}`). Default = SerpApi Home Depot engine. | Default (SerpApi) unless overridden. |
+| `EXTRACTION_API_KEY` / `ANTHROPIC_API_KEY` | Turns on LLM proposal extraction. No key → deterministic heuristic. | Not set → heuristic (fine as default). |
+| `EXTRACTION_MODEL` | LLM model id (default `claude-sonnet-5`). | Optional. |
+| `PRICING_MOCK` | Dev/test only — deterministic fake prices. `0/false/no/off` = disabled. | Not set in prod (correct). |
+| `RATE_LIMIT_MAX` / `_WINDOW_MS` / `_DISABLED` | Rate-limiter tuning. | Defaults (120/60s). |
+| `PORT` | Railway injects. | ok |
 
 ---
 
 ## 6. Git / deploy state
-- Branch `main`, **in sync with `origin/main`**. Railway auto-deploys the material-takeoff service from `main`.
-- Relevant commits (all pushed):
-  - `ab947b7` — Parallelize price lookups (capped concurrency).
-  - `cb73d62` — Add pricing & profit layer (live Home Depot pricing).
-  - `58dc199` — Original Material Takeoff module (engine + HTTP API).
-- **Uncommitted (docs only, no prod impact):** `API_GUIDE.md` (HI), `BUILDSUITE_INTEGRATION.md`,
-  `PRODUCT_KNOWLEDGE_BASE.md`, `EOD_MATERIAL_TAKEOFF_2026-07-09.md`, `EOD_MATERIAL_TAKEOFF_2026-07-11.md`,
-  and this file. (House Intelligence code is untouched this thread.)
+
+- Branch `main`, **in sync with `origin/main`**. Railway auto-deploys the material-takeoff service.
+- Latest relevant commits (pushed):
+  - `6754af3` — Fix Sing's integration issues (pack-size pricing, Scope-of-Work extraction, denylist).
+  - `587e492` — Material Takeoff v2 (from-scope + from-proposal, extraction seam, budget fallback,
+    site protection, HTML export).
+  - (earlier) v1 engine + pricing layer + bathroom/flooring/room-shape/pack-size/add-ons phases.
+- **Uncommitted (docs only, no prod impact):** the EOD files and the Sing handoff
+  (`Material_Takeoff_v2_Fixes_from_Dale.md`), plus this state file. Code + API guide + reference doc
+  are committed. (House Intelligence code untouched.)
 
 ---
 
-## 7. Known issues / gotchas
-- **em-dash artifact:** `tier_label` renders as `Better â€" mid-grade` in served JSON — an em-dash
-  encoding issue in `material_dataset.json` tier labels. Cosmetic, **not yet fixed** (planned: replace
-  em-dashes with `-`; HI had the same issue before).
-- **Made-to-measure pricing is rough:** cabinets priced per LF, countertop per sqft (flagged
-  `field_estimate:true`) — budget only, not a quote. Tile priced per sqft, not per box/slab.
-- **Labor default = 100% of materials** — a placeholder rule of thumb; override per job.
-- **Free-tier credits** run out fast (~9 takeoffs) — see §3.
+## 7. What BuildSuite (Sing) reported + we fixed (2026-07-29)
+
+Real-proposal integration testing surfaced three issues; all fixed, response **shape unchanged**
+(values corrected, fields additive):
+1. **Pack/case pricing (blocker)** — case/pack prices read as per-unit → 5×–25× over. Fixed via
+   `normalizePackPrice` + per-line sanity bands. Dumpster retuned off the consumer bag + floored (now
+   honestly `unpriced` — HD doesn't rent 20-yd dumpsters; budget fallback covers it).
+2. **Extraction captured one trade** — now parses `### N.` subsections under `## Scope of Work`.
+3. **Every heading became a section** — non-work headings denylisted; only Scope-of-Work counts.
+Plus: `extracted_scope` `id`/`area_sqft`/body-level `source_quote`/populated `notes`.
+
+Sing can now **remove his `## Scope of Work` slicing workaround** and start sending the **cost
+breakdown table** (feeds the budget fallback). Awaiting his re-test on real proposals.
 
 ---
 
-## 8. Next steps (in order)
-1. **Wait for BigBox** to finish preparing zip 98006 (`preparing → ready`). Nothing to change; a poll
-   for `hammer` returning `success:true` = ready. (As of 2026-07-11 it had not finished after ~8 min.)
-2. **Then:** re-test prod (§2 verify command) → confirm 11 priced lines + profit layout. First real
-   call also validates BigBox's response shape parses via `extractProduct` (standing "confirm live
-   shape" rule).
-3. Fix the em-dash tier labels (quick, key-free).
-4. Consider: rotate the exposed BigBox key; upgrade BigBox plan before real usage.
-5. Later product work: 2nd project type (bathroom — data-driven, no engine rewrite); wire pricing into
-   the BuildSuite proposal UI; unit reconciliation (tile per box, not sqft).
+## 8. Open decisions / known gotchas
+
+- **Q1 — who owns the LLM extraction?** Heuristic covers BuildSuite's format; arbitrary proposals need
+  the LLM (seam built, just needs the ownership call + a key). Single biggest strategic unblock.
+- **Dumpster/rental → `unpriced`** by design (HD can't price it). Open call with Sing: keep it a
+  "local quote" line or add a per-locality placeholder.
+- **`order_discount`** — volume-pricing seam documented, not applied to the profit layout yet.
+- **Made-to-measure lines are rough** (cabinets per LF, countertop/vanity-top per sqft, flagged
+  `field_estimate:true`) — budget only, not a quote.
+- **Labor default = 100% of materials** (flooring 60%) — placeholder; override per job.
+- **Stateless + public** (rate-limited only) — no auth/persistence yet (needed before billing).
 
 ---
 
-## 9. Quick commands
+## 9. Next steps / phase options
+
+1. **Support Sing's re-test** (reactive) — retune pack-title patterns / sanity bands as real proposals
+   come back. Same-day.
+2. **Expanded project types** (recommended next build) — drywall-only, bedroom, living room,
+   whole-home-by-room. Deterministic, no external dependency; each is a small builder + dataset block
+   and instantly works in `from-scope`/`from-proposal`. Requested in the huddle.
+3. **Turn on LLM extraction** — pending the Q1 decision + a key.
+4. **Productionization** — API-key auth, request logging, persistence (save takeoffs per project) —
+   the gate before billing inside BuildSuite.
+5. **Pricing polish** — apply `order_discount`, exact-SKU pinning, price caching/refresh.
+
+---
+
+## 10. Quick commands
+
 ```bash
 cd material-takeoff
-npm test                                   # 150 tests
-PRICING_MOCK=1 node smoke_pricing.js 200 better         # dry-run pricing (no key)
-HOMEDEPOT_API_KEY=<key> HOMEDEPOT_API_URL='https://api.bigboxapi.com/request?api_key={key}&type=search&search_term={query}&customer_zipcode=98499' \
-  node smoke_pricing.js 200 better         # LIVE verification against BigBox
-```
-```bash
-# BigBox account/zipcode diagnostics (replace KEY)
-curl "https://api.bigboxapi.com/account?api_key=KEY"
-curl "https://api.bigboxapi.com/zipcodes?api_key=KEY"
-```
-```bash
-# prod quantities (works today) / prod pricing (works after §2 fix)
-curl "https://house-intelligence-production-f7f6.up.railway.app/material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&format=text"
+npm test                                                 # 524 tests
+PRICING_MOCK=1 node smoke_pricing.js 200 better          # dry-run pricing (no key)
+
+# prod — quantities (always), pricing (needs the SerpApi key on the server)
 curl "https://house-intelligence-production-f7f6.up.railway.app/material-takeoff?projectType=kitchen_remodel&kitchenSqft=200&price=true&format=text"
+
+# multi-section (from-scope)
+curl -X POST https://house-intelligence-production-f7f6.up.railway.app/material-takeoff/from-scope \
+  -H "Content-Type: application/json" \
+  -d '{"sections":[{"label":"Kitchen","project_type":"kitchen_remodel","inputs":{"kitchenSqft":200}},{"label":"Bath","project_type":"bathroom_remodel","inputs":{"bathroomSqft":60}}],"price":true}'
+
+# from a proposal
+curl -X POST https://house-intelligence-production-f7f6.up.railway.app/material-takeoff/from-proposal \
+  -H "Content-Type: application/json" \
+  -d '{"proposal_markdown":"## Scope of Work\n### 1. Flooring Installation\n- install 1400 sqft of LVP\n","price":true}'
 ```

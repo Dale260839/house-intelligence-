@@ -44,6 +44,26 @@ const PRICE_BANDS = {
   demolition_dumpster: { min: 200 },
 };
 
+// Lines that are NOT a Home Depot retail SKU — don't waste a live lookup on them, and give a
+// distinct reason so a consumer can tell "intentionally not priced" from "the lookup broke".
+const NOT_RETAIL_KEYS = new Set(['demolition_dumpster']);
+
+// When more than this share of a takeoff's lines fail to price, the total is not trustworthy —
+// flag it on the payload (`ok:false`, `reason:'pricing_degraded'`) so every consumer degrades
+// off ONE signal instead of walking two arrays. The budget fallback (which fills unpriced lines)
+// keeps this from tripping when a budget is supplied.
+const DEGRADE_THRESHOLD = 0.25;
+function pricingReliability(pricedCount, unpricedCount) {
+  const total = pricedCount + unpricedCount;
+  const degraded = total > 0 && (unpricedCount / total) > DEGRADE_THRESHOLD;
+  return {
+    ok: !degraded,
+    reason: degraded ? 'pricing_degraded' : undefined,
+    priced_count: pricedCount,
+    unpriced_count: unpricedCount,
+  };
+}
+
 // Run fn over items with at most `limit` in flight at once, preserving input order.
 // Lets the per-line price lookups overlap (a full takeoff prices in ~one slow call
 // instead of the sum of 11) without hammering a rate-limited API with all 11 at once.
@@ -118,6 +138,9 @@ async function priceMaterialLines(materials, pricingCfg, provider, tier) {
       field_estimate: !!(cfg && cfg.field_estimate) || !!m.field_verify,
     };
     if (!cfg || !query) return { ...base, priced: false, price_source: null, reason: 'no_pricing_config' };
+    // Not a retail SKU (e.g. a dumpster rental — HD doesn't sell it). Skip the live call and say so
+    // distinctly, so the consumer renders a "local quote" line rather than a broken lookup.
+    if (NOT_RETAIL_KEYS.has(m.key)) return { ...base, priced: false, price_source: null, reason: 'not_retail_sku' };
 
     // Effective sanity band: the dataset line overrides the per-key default (PRICE_BANDS).
     const band = PRICE_BANDS[m.key] || {};
@@ -185,8 +208,10 @@ async function priceTakeoff(takeoff, opts = {}) {
   const profit = round2(price - totalCost);
   const marginPct = price > 0 ? round1((profit / price) * 100) : 0;
 
+  const rel = pricingReliability(lines.length, unpriced.length);
   return {
-    ok: true,
+    ok: rel.ok,
+    reason: rel.reason,
     source: provider.source || provider.id || 'unknown',
     currency: 'USD',
     tier,
@@ -194,6 +219,8 @@ async function priceTakeoff(takeoff, opts = {}) {
     lines,
     unpriced_lines: unpriced,
     fully_priced: unpriced.length === 0,
+    priced_count: rel.priced_count,
+    unpriced_count: rel.unpriced_count,
     labor: {
       basis: laborBasis,
       pct_of_materials: laborBasis === 'pct_of_materials' ? laborPct : null,
@@ -246,10 +273,56 @@ function budgetFallbackLines(pricedLines, unpricedLines, budgetHint) {
   return { estimated, remainingUnpriced: [] };
 }
 
+// Materials are typically ~30-45% of a construction line item (the rest is labor, overhead, and
+// profit). A `budget_total` / `budget_sections` figure is the CLIENT PRICE, so it must be scaled by
+// this share before it can seed the materials-only fallback — otherwise materials absorb the whole
+// job (the $15k bathroom → $36k bug). Overridable per call via `materialsShare`.
+function resolveMaterialsShare(opts) {
+  const s = Number(opts && opts.materialsShare);
+  return (Number.isFinite(s) && s > 0 && s <= 1) ? s : 0.35;
+}
+
+// Match a client-price budget_sections entry to a section by trade keyword or section-id word.
+function matchBudgetSection(budgetSections, st) {
+  if (!Array.isArray(budgetSections)) return null;
+  const trade = String(st.project_type || '').split('_')[0];   // kitchen | bathroom | flooring
+  const sid = String(st.section_id || '').toLowerCase();
+  const hit = budgetSections.find(b => {
+    const l = String((b && b.label) || '').toLowerCase();
+    if (!l) return false;
+    return l.includes(trade) || sid.split('-').some(w => w.length > 2 && l.includes(w));
+  });
+  const amt = hit && Number(hit.amount);
+  return Number.isFinite(amt) && amt > 0 ? amt : null;
+}
+
+/**
+ * Resolve a section's MATERIALS budget for the fallback, honouring the unit of each source:
+ *   1. `st.budget_hint`      — from-scope per-section MATERIALS budget → used directly.
+ *   2. `opts.materials_budget` — call-level MATERIALS budget → split evenly across sections.
+ *   3. `budget_sections` match — CLIENT PRICE → × materialsShare.
+ *   4. `budget_total`        — CLIENT PRICE → × materialsShare, split evenly across sections.
+ */
+function sectionMaterialsBudget(st, opts, materialsShare, sectionCount) {
+  if (Number(st.budget_hint) > 0) return Number(st.budget_hint);          // already materials
+  const explicitMaterials = Number(opts.materials_budget);
+  if (Number.isFinite(explicitMaterials) && explicitMaterials > 0) {
+    return round2(explicitMaterials / sectionCount);
+  }
+  const clientSection = matchBudgetSection(opts.budget_sections, st);
+  if (clientSection != null) return round2(clientSection * materialsShare);
+  const clientTotal = Number(opts.budget_total);
+  if (Number.isFinite(clientTotal) && clientTotal > 0) {
+    return round2((clientTotal * materialsShare) / sectionCount);
+  }
+  return null;
+}
+
 /**
  * Price a MULTI-SECTION (scope / proposal) takeoff.
  *   sectionTakeoffs — [{ section_id, project_type, materials, budget_hint }] from scope_engine
- *   opts            — { provider (required), dataset, tier, markupPct, laborPct, laborCost }
+ *   opts            — { provider (required), dataset, tier, markupPct, laborPct, laborCost,
+ *                       budget_total, budget_sections, materials_budget, materialsShare }
  * Each section's lines are priced against ITS OWN project pricing config (a composite job
  * mixes a kitchen + a bath + a floor, each with different search terms), then merged and
  * costed ONCE: one labor line, one profit layout over the whole scope. Unmatched lines run
@@ -270,6 +343,7 @@ async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
   const firstCfg = (firstDef && firstDef.pricing) || { tiers: ['good', 'better', 'best'] };
   const { tier, markupPct, laborCost, laborPct, warnings } = resolvePricingOpts(opts, firstCfg);
 
+  const materialsShare = resolveMaterialsShare(opts);
   const allLines = [];
   const allUnpriced = [];
   const sectionBreakdown = [];
@@ -289,7 +363,8 @@ async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
     }
 
     const { lines, unpriced } = await priceMaterialLines(st.materials, cfg, provider, tier);
-    const { estimated, remainingUnpriced } = budgetFallbackLines(lines, unpriced, st.budget_hint);
+    const matBudget = sectionMaterialsBudget(st, opts, materialsShare, sectionTakeoffs.length);
+    const { estimated, remainingUnpriced } = budgetFallbackLines(lines, unpriced, matBudget);
     const sectionLines = [...lines, ...estimated];
     allLines.push(...sectionLines);
     allUnpriced.push(...remainingUnpriced);
@@ -309,8 +384,10 @@ async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
   const profit = round2(price - totalCost);
   const marginPct = price > 0 ? round1((profit / price) * 100) : 0;
 
+  const rel = pricingReliability(allLines.length, allUnpriced.length);
   return {
-    ok: true,
+    ok: rel.ok,
+    reason: rel.reason,
     source: provider.source || provider.id || 'unknown',
     currency: 'USD',
     tier,
@@ -318,6 +395,8 @@ async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
     lines: allLines,
     unpriced_lines: allUnpriced,
     fully_priced: allUnpriced.length === 0,
+    priced_count: rel.priced_count,
+    unpriced_count: rel.unpriced_count,
     sections: sectionBreakdown,
     labor: {
       basis: laborBasis,

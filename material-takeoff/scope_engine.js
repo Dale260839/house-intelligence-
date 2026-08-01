@@ -223,6 +223,12 @@ async function buildProposalTakeoff(body, dataset, provider) {
   scope.extraction_source = ex.source;
   scope.extraction_cached = !!ex.cached;
   scope.extracted_scope = ex.extracted_scope;
+  // Surface assumed areas at the RESPONSE level (not only in notes) — an assumed sqft silently
+  // drives every tile/drywall/paint/trim quantity, so the caller should be able to flag it loudly.
+  scope.assumptions = ex.extracted_scope.sections
+    .filter(s => s && s.confidence === 'assumed')
+    .map(s => ({ section_id: s.id || s.section_id, project_type: s.project_type, area_sqft: s.area_sqft,
+      message: `Area not stated for "${s.label}" — assumed ${s.area_sqft} sqft; all quantities scale with it.` }));
   return scope;
 }
 

@@ -198,6 +198,39 @@ const bySection = (mats, sid) => mats.filter(m => m.section_id === sid);
   check('unpriceable passthrough falls to a budget estimate (proposal_budget)', passPriced.lines.some(l => l.key === 'custom_hood' && l.price_source === 'proposal_budget'));
 
   console.log('\n========================================');
+  console.log('Issue 2 — budget-fallback UNITS (client price vs materials)');
+  console.log('========================================');
+
+  // A provider that matches nothing, so the budget alone drives materials_cost.
+  const noneProv = { id: 'none', source: 'homedepot_live', async lookup() { return { ok: false, reason: 'no_match' }; } };
+  const kScope = buildScopeTakeoff({ sections: [{ project_type: 'kitchen_remodel', inputs: { kitchenSqft: 200 } }] }, ds);
+
+  // budget_total is the CLIENT PRICE -> materials land at total x share (0.35), NOT the whole total.
+  const pCP = await priceScopeTakeoff(kScope.section_takeoffs, { provider: noneProv, dataset: ds, tier: 'better', markupPct: 20, laborPct: 100, budget_total: 15000 });
+  check('client-price budget_total x 0.35 -> materials ~ $5,250 (not $15,000)', Math.abs(pCP.profit_layout.materials_cost - 5250) <= 1);
+  check('  materials never absorb the whole client price', pCP.profit_layout.materials_cost < 15000);
+
+  // materialsShare override.
+  const pShare = await priceScopeTakeoff(kScope.section_takeoffs, { provider: noneProv, dataset: ds, tier: 'better', budget_total: 15000, materialsShare: 0.5 });
+  check('materialsShare override applies (0.5 -> ~$7,500)', Math.abs(pShare.profit_layout.materials_cost - 7500) <= 1);
+
+  // explicit materials_budget is used as-is (no share).
+  const pMat = await priceScopeTakeoff(kScope.section_takeoffs, { provider: noneProv, dataset: ds, tier: 'better', materials_budget: 6000 });
+  check('explicit materials_budget used directly (no share) -> ~$6,000', Math.abs(pMat.profit_layout.materials_cost - 6000) <= 1);
+
+  // from-scope per-section budget_hint stays a MATERIALS figure (direct, no share).
+  const hintScope = buildScopeTakeoff({ sections: [{ project_type: 'kitchen_remodel', inputs: { kitchenSqft: 200 }, budget_hint: 8000 }] }, ds);
+  const pHint = await priceScopeTakeoff(hintScope.section_takeoffs, { provider: noneProv, dataset: ds, tier: 'better' });
+  check('from-scope budget_hint is materials (direct, no share) -> ~$8,000', Math.abs(pHint.profit_layout.materials_cost - 8000) <= 1);
+
+  // Reliability: no budget + all fail -> ok:false pricing_degraded + counts.
+  const pDeg = await priceScopeTakeoff(kScope.section_takeoffs, { provider: noneProv, dataset: ds, tier: 'better' });
+  check('no budget + all fail -> ok:false pricing_degraded', pDeg.ok === false && pDeg.reason === 'pricing_degraded');
+  check('  -> priced_count 0, unpriced_count = all lines', pDeg.priced_count === 0 && pDeg.unpriced_count === kScope.materials.length);
+  // With a budget, the fallback fills the lines -> reliable again.
+  check('budget rescues reliability (ok:true, unpriced_count 0)', pCP.ok === true && pCP.unpriced_count === 0);
+
+  console.log('\n========================================');
   console.log(`RESULT: ${pass} passed, ${fail} failed`);
   console.log('========================================');
   process.exit(fail > 0 ? 1 : 0);

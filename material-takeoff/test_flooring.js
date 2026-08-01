@@ -104,7 +104,9 @@ const has = (t, k) => t.materials.some(m => m.key === k);
   for (const t of ['tile', 'lvp', 'hardwood']) {
     const tk = F({ flooringType: t, includeDemolition: true, includeTrim: true });
     const pr = await priceTakeoff(tk, { provider: mock, dataset: ds, tier: 'better' });
-    check(`${t} takeoff fully priced (${pr.lines.length} lines)`, pr.ok === true && pr.fully_priced === true);
+    // demolition_dumpster is not a retail SKU -> intentionally unpriced; everything else prices.
+    const badUnpriced = pr.unpriced_lines.filter(u => u.reason !== 'not_retail_sku');
+    check(`${t} takeoff reliable (${pr.lines.length} priced; only dumpster unpriced)`, pr.ok === true && badUnpriced.length === 0);
   }
   const pr = await priceTakeoff(F(), { provider: mock, dataset: ds });
   check('flooring labor default is 60% of materials (not 100%)', pr.labor.pct_of_materials === 60);

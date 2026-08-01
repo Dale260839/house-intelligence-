@@ -59,9 +59,10 @@ Renovate the 90 sqft master bathroom with a new walk-in shower and vanity. Insta
   check('extraction is deterministic (identical in -> identical out)',
     JSON.stringify(heuristicExtract({ proposal_markdown: PROPOSAL })) === JSON.stringify(heuristicExtract({ proposal_markdown: PROPOSAL })));
 
-  // budget_hint from budget_sections by trade keyword
-  const budgeted = heuristicExtract({ proposal_markdown: PROPOSAL, budget_sections: [{ label: 'Kitchen materials', amount: 18000 }, { label: 'Bathroom', amount: 9000 }] });
-  check('budget_sections mapped to sections by trade', budgeted.extracted_scope.sections[0].budget_hint === 18000 && budgeted.extracted_scope.sections[1].budget_hint === 9000);
+  // Budgets are no longer applied at extraction (a client-price figure carries no unit there) — the
+  // pricing layer owns the client-price → materials-share conversion. Extraction stays unit-free.
+  const budgeted = heuristicExtract({ proposal_markdown: PROPOSAL, budget_sections: [{ label: 'Kitchen materials', amount: 18000 }] });
+  check('extraction stays unit-free (no budget_hint baked into sections)', budgeted.extracted_scope.sections.every(s => s.budget_hint == null));
 
   console.log('\n========================================');
   console.log('U7 — buildProposalTakeoff end-to-end (heuristic provider)');
@@ -120,6 +121,43 @@ Renovate the 90 sqft master bathroom with a new walk-in shower and vanity. Insta
   check('smaller: extracted section has a non-null id', typeof exSec.id === 'string' && exSec.id.length > 0);
   check('smaller: extracted section has area_sqft populated (75)', exSec.area_sqft === 75);
   check('smaller: source_quote is a body sentence, not the heading', /75 sqft|walk-in/i.test(exSec.source_quote) && exSec.source_quote !== '1. Bathroom');
+
+  console.log('\n========================================');
+  console.log('Pricing-issues fixes (Sing, Aug 1) — labels, bullets, defaults, assumptions');
+  console.log('========================================');
+
+  // Issue 3: a merged section is named by its resolved trade, not the first subsection's heading.
+  const merged = heuristicExtract({ proposal_markdown:
+    '## Scope of Work\n### 1. Bathroom Demolition & Site Protection\n- remove old bathroom fixtures, protect the space\n### 2. Bathroom Tile & Waterproofing\n- set 60 sqft of bathroom floor tile\n### 3. Bathroom Vanity & Fixtures\n- install the vanity and toilet\n' });
+  check('Issue 3: merged section labeled by trade ("Bathroom Remodel — merged from 3…")', /Bathroom Remodel — merged from 3/.test(merged.extracted_scope.sections[0].label));
+  check('  -> not the first subsection heading', !/Demolition/i.test(merged.extracted_scope.sections[0].label));
+  check('  -> area resolved from the tile subsection (60)', merged.extracted_scope.sections[0].area_sqft === 60);
+
+  // A "floor tile" phase inside a bathroom scope stays part of the bathroom — not a spurious
+  // flooring_only section (Sing's Issue 1 repro split into composite before this).
+  const bathTile = heuristicExtract({ proposal_markdown:
+    '## Scope of Work\n### 1. Demolition\n- remove the toilet and vanity\n### 2. Backer Board & Tile\n- set wall and floor tile\n### 3. Vanity & Fixtures\n- install vanity and toilet\n' });
+  check('a "floor tile" phase in a bathroom scope stays bathroom (not composite)',
+    bathTile.extracted_scope.sections.length === 1 && bathTile.extracted_scope.sections[0].project_type === 'bathroom_remodel');
+  // A genuine LVP flooring job alongside a kitchen still splits into two sections.
+  const kitchenFloor = heuristicExtract({ proposal_markdown:
+    '## Scope of Work\n### 1. Kitchen Cabinets\n- install new kitchen cabinets and counters\n### 2. Flooring\n- install 800 sqft of LVP throughout\n' });
+  check('a real LVP flooring job still splits from the kitchen (strong signal)',
+    kitchenFloor.extracted_scope.sections.length === 2 && kitchenFloor.extracted_scope.sections.some(s => s.project_type === 'flooring_only'));
+
+  // §4: BuildSuite's "- **Title**: body" bullets under Scope of Work are parsed as subsections.
+  const bulleted = heuristicExtract({ proposal_markdown:
+    '## Scope of Work\n\n- **Kitchen Demolition & Cabinets**: Remove kitchen finishes and install new cabinets in the 180 sqft kitchen.\n- **Flooring Installation**: Install 1400 sqft of LVP throughout.\n' });
+  check('§4: bolded-bullet SOW -> two sections (kitchen + flooring)', bulleted.extracted_scope.sections.length === 2);
+  check('  -> types kitchen + flooring', bulleted.extracted_scope.sections.map(s => s.project_type).sort().join(',') === 'flooring_only,kitchen_remodel');
+
+  // Smaller: bathroom default lowered to 50 sqft (was 100).
+  const bathNoArea = heuristicExtract({ proposal_markdown: '## Scope of Work\n### 1. Bathroom\n- full bathroom remodel, walk-in shower and vanity\n' });
+  check('bathroom default area is 50 sqft (assumed)', bathNoArea.extracted_scope.sections[0].area_sqft === 50 && bathNoArea.extracted_scope.sections[0].confidence === 'assumed');
+
+  // Smaller: assumed area surfaced at the RESPONSE level (assumptions[]), not only in notes.
+  const assumedT = await buildProposalTakeoff({ proposal_markdown: '## Scope of Work\n### 1. Bathroom\n- full bathroom remodel\n' }, ds, createHeuristicExtractionProvider());
+  check('assumed area surfaced at response level (assumptions[])', Array.isArray(assumedT.assumptions) && assumedT.assumptions.length === 1 && assumedT.assumptions[0].area_sqft === 50);
 
   console.log('\n========================================');
   console.log('U7 — LLM provider seam (injected transport, cached by proposal hash)');
