@@ -314,6 +314,52 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   check('  -> priced_count/unpriced_count reported on the pricing block', typeof dumpPr.priced_count === 'number' && typeof dumpPr.unpriced_count === 'number');
 
   console.log('\n========================================');
+  console.log('CIRCUIT BREAKER — fail fast when the provider is down (no hanging)');
+  console.log('========================================');
+
+  let breakerCalls = 0;
+  const deadProvider = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, maxRetries: 0, breakerThreshold: 3,
+    fetchImpl: async () => { breakerCalls++; throw new Error('timeout'); } });
+  for (let i = 0; i < 3; i++) await deadProvider.lookup({ query: 'q' + i });   // distinct queries -> 3 real fails -> trip
+  const callsAtTrip = breakerCalls;
+  const afterTrip = await deadProvider.lookup({ query: 'q-after' });
+  check('breaker trips after threshold consecutive fails -> provider_unavailable', afterTrip.ok === false && afterTrip.reason === 'provider_unavailable');
+  check('  -> a tripped provider makes NO further fetches (fast fail)', breakerCalls === callsAtTrip);
+
+  // A single flaky line (fails within one lookup) must NOT trip the breaker (threshold > retries).
+  let flakyOne = 0;
+  const oneFlaky = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, maxRetries: 2, breakerThreshold: 5,
+    fetchImpl: async () => { flakyOne++; if (flakyOne < 3) throw new Error('blip'); return { ok: true, status: 200, async json() { return { products: [{ price: 8 }] }; }, async text() { return ''; } }; } });
+  const flakyRes2 = await oneFlaky.lookup({ query: 'z' });
+  check('one flaky line (retried to success) does not trip the breaker', flakyRes2.ok === true && flakyRes2.unit_price === 8);
+
+  console.log('\n========================================');
+  console.log('PERSISTENT PRICE CACHE — scrape a term once, reuse across requests');
+  console.log('========================================');
+
+  const shared = new Map();
+  let cacheFetches = 0;
+  const mkShared = () => createHomeDepotProvider({ apiKey: 'K', sharedCache: shared,
+    fetchImpl: async () => { cacheFetches++; return { ok: true, status: 200, async json() { return { products: [{ price: 9.5 }] }; }, async text() { return ''; } }; } });
+  const c1 = await mkShared().lookup({ query: 'shared-term' });
+  const c2 = await mkShared().lookup({ query: 'shared-term' });   // a DIFFERENT request/instance, same Map
+  check('cache: 2nd lookup (new instance) served from cache, only 1 fetch', c1.unit_price === 9.5 && c2.unit_price === 9.5 && cacheFetches === 1);
+
+  let ttlFetches = 0;
+  const sharedTtl = new Map();
+  const mkTtlProv = () => createHomeDepotProvider({ apiKey: 'K', sharedCache: sharedTtl, cacheTtlMs: -1,
+    fetchImpl: async () => { ttlFetches++; return { ok: true, status: 200, async json() { return { products: [{ price: 5 }] }; }, async text() { return ''; } }; } });
+  await mkTtlProv().lookup({ query: 't' });   // separate instances (separate requests) so the
+  await mkTtlProv().lookup({ query: 't' });   // per-request memo doesn't mask the TTL check
+  check('cache honors TTL (ttl -1 -> entry always expired, re-fetch)', ttlFetches === 2);
+
+  const failShared = new Map();
+  const failProv = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, maxRetries: 0, sharedCache: failShared,
+    fetchImpl: async () => ({ ok: true, status: 200, async json() { return { products: [] }; }, async text() { return ''; } }) });   // no_match
+  await failProv.lookup({ query: 'nope' });
+  check('cache does NOT store failures', failShared.size === 0);
+
+  console.log('\n========================================');
   console.log('PROVIDER SELECTION (mirrors selectStore)');
   console.log('========================================');
   check('HOMEDEPOT_API_KEY set -> live provider', selectPricingProvider({ HOMEDEPOT_API_KEY: 'k' }).provider.id === 'homedepot_live');

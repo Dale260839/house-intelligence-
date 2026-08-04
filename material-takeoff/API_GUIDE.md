@@ -758,6 +758,6 @@ not a substitute for field measurement.
 ---
 
 _Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 40 add-ons + 53 flooring +
-95 pricing + 71 scope + 59 proposal + 24 rate-limit + 58 HTTP tests = **547**). Standards are sourced in
+101 pricing + 71 scope + 59 proposal + 24 rate-limit + 58 HTTP tests = **553**). Standards are sourced in
 `material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
 

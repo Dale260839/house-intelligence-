@@ -231,28 +231,65 @@ function isTransientLookup(r) {
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// PERSISTENT PRICE CACHE (module-level; survives across requests until the process restarts).
+// The search terms are a small fixed set, so caching each successful price means we scrape a
+// term ONCE and reuse it — instant on later takeoffs, a fraction of the credits, and (crucially)
+// a cache warmed before a provider outage keeps serving prices THROUGH the outage. Only successes
+// are cached; entries expire after the TTL. Production shares this Map; tests pass their own (or
+// none) so cache state never leaks between them.
+const SHARED_PRICE_CACHE = new Map();   // cacheKey -> { result, ts }
+function clearPriceCache() { SHARED_PRICE_CACHE.clear(); }
+function priceCacheStats() { return { size: SHARED_PRICE_CACHE.size }; }
+
 function createHomeDepotProvider(opts = {}) {
   const apiKey = opts.apiKey || process.env.HOMEDEPOT_API_KEY || '';
   const apiUrl = opts.apiUrl || process.env.HOMEDEPOT_API_URL || '';
   if (!apiKey) throw new Error('createHomeDepotProvider: missing HOMEDEPOT_API_KEY.');
   const fetchImpl = opts.fetchImpl || httpsRequestJson;
-  const timeoutMs = opts.timeoutMs || 10000;
+  const timeoutMs = opts.timeoutMs || Number(process.env.PRICING_TIMEOUT_MS) || 12000;
   const maxRetries = opts.maxRetries != null ? opts.maxRetries
     : (Number(process.env.PRICING_MAX_RETRIES) || 2);
   const retryBackoffMs = opts.retryBackoffMs != null ? opts.retryBackoffMs : 300;
+  // Circuit breaker: after this many consecutive transient failures WITHIN ONE request, stop
+  // calling a dead/slow provider and fail the rest fast (→ budget fallback), instead of hanging
+  // 10-15s per line. >= the lookup concurrency, and > a single line's retry count, so one flaky
+  // line never trips it but a real outage does.
+  const breakerThreshold = opts.breakerThreshold != null ? opts.breakerThreshold
+    : (Number(process.env.PRICING_BREAKER_THRESHOLD) || 5);
 
-  // Within one takeoff the same query can repeat; cache so we bill one call per query.
-  const cache = new Map();
+  const sharedCache = opts.sharedCache || null;   // persistent success cache (production passes one)
+  const cacheTtlMs = opts.cacheTtlMs != null ? opts.cacheTtlMs
+    : (Number(process.env.PRICE_CACHE_TTL_MS) || 24 * 60 * 60 * 1000);   // 24h default
+
+  const memo = new Map();      // per-request memo (one bill per query within a takeoff)
+  let consecutiveFails = 0;    // circuit-breaker state, per provider instance (= per request)
+  let tripped = false;
+
+  const sharedGet = (key) => {
+    if (!sharedCache) return null;
+    const e = sharedCache.get(key);
+    if (!e) return null;
+    if (Date.now() - e.ts > cacheTtlMs) { sharedCache.delete(key); return null; }
+    return e.result;
+  };
+  const sharedSet = (key, result) => { if (sharedCache && result && result.ok) sharedCache.set(key, { result, ts: Date.now() }); };
 
   return {
     id: 'homedepot_live',
     source: 'homedepot_live',
     async lookup({ query, minPrice, maxPrice, priceUnit }) {
       if (!query) return { ok: false, reason: 'no_search_term' };
-      // Key the cache on the guards + unit too: the same term with a different floor/ceiling or
-      // price unit is a different question and must not return a cached answer from another config.
+      // Key on the guards + unit too: the same term with a different floor/ceiling or price unit
+      // is a different question and must not return a cached answer from another config.
       const cacheKey = `${query}|${minPrice || ''}|${maxPrice || ''}|${priceUnit || ''}`;
-      if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+      // 1. persistent success cache (survives across requests; carries through provider outages)
+      const cached = sharedGet(cacheKey);
+      if (cached) return cached;
+      // 2. per-request memo
+      if (memo.has(cacheKey)) return memo.get(cacheKey);
+      // 3. circuit breaker — provider is down for this request; fail fast, don't hang.
+      if (tripped) { const r = { ok: false, reason: 'provider_unavailable' }; memo.set(cacheKey, r); return r; }
 
       const attempt = async () => {
         try {
@@ -280,14 +317,19 @@ function createHomeDepotProvider(opts = {}) {
         }
       };
 
-      // Retry transient failures with linear backoff; a non-transient result returns immediately.
+      // Retry transient failures with backoff; abort early if the breaker trips (an outage).
       let result;
       for (let i = 0; i <= maxRetries; i++) {
+        if (tripped) { result = { ok: false, reason: 'provider_unavailable' }; break; }
         result = await attempt();
-        if (result.ok || !isTransientLookup(result)) break;
+        if (result.ok) { consecutiveFails = 0; break; }
+        if (!isTransientLookup(result)) break;          // no_match / auth_error → don't retry
+        if (++consecutiveFails >= breakerThreshold) { tripped = true; break; }
         if (i < maxRetries) await sleep(retryBackoffMs * (i + 1));
       }
-      if (result.ok || !isTransientLookup(result)) cache.set(cacheKey, result); // don't pin a transient miss
+
+      if (result.ok) { sharedSet(cacheKey, result); memo.set(cacheKey, result); }
+      else if (!isTransientLookup(result)) memo.set(cacheKey, result);   // memo hard failures per request
       return result;
     },
   };
@@ -368,7 +410,9 @@ function selectPricingProvider(env = process.env) {
   const key = String(env.HOMEDEPOT_API_KEY || '').trim();
   if (key) {
     return {
-      provider: createHomeDepotProvider({ apiKey: key, apiUrl: env.HOMEDEPOT_API_URL }),
+      // Production shares the persistent price cache across requests (warm once, reuse cheaply +
+      // survive provider outages). Tests build providers directly without it, so state is isolated.
+      provider: createHomeDepotProvider({ apiKey: key, apiUrl: env.HOMEDEPOT_API_URL, sharedCache: SHARED_PRICE_CACHE }),
       label: 'homedepot (live) via HOMEDEPOT_API_KEY',
     };
   }
@@ -391,5 +435,7 @@ module.exports = {
   createHomeDepotProvider,
   createMockPricingProvider,
   selectPricingProvider,
+  clearPriceCache,
+  priceCacheStats,
   MOCK_UNIT_PRICES,
 };

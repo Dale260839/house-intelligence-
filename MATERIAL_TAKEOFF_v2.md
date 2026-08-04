@@ -96,11 +96,16 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
    (below a per-line floor). Plus a **per-line sanity band** (`PRICE_BANDS`, dataset
    `min/max_unit_price` overrides): a normalized price still outside the plausible range for that line
    key is a unit mismatch → the line drops to `unpriced_lines` rather than ship a wrong number.
-4. **Reliability (Aug-1 fix):** transient lookups (network_error / timeout / rate-limit) are **retried**
-   with backoff — SerpApi is flaky under concurrency and a dropped line silently understates the total.
+4. **Reliability (Aug-1 + Aug-4 hardening):** transient lookups (network_error / timeout / rate-limit)
+   are **retried** with backoff; a **circuit breaker** trips after N consecutive failures so a
+   dead/slow provider fails the rest of the takeoff **fast** (→ budget fallback) instead of hanging
+   10-15s per line. A **persistent price cache** (module-level, TTL default 24h, `sharedCache`) scrapes
+   each of the small fixed set of search terms **once** and reuses it — instant + cheap on later
+   takeoffs, and a cache warmed before a provider outage keeps serving prices **through** the outage.
    The block carries `priced_count`/`unpriced_count`, and `ok` flips to **false** (`reason:
-   "pricing_degraded"`) when >25% of lines fail — one signal, so consumers degrade without walking two
-   arrays. A budget (which fills unpriced lines) keeps this from tripping.
+   "pricing_degraded"`) when >25% of lines fail — one signal so consumers degrade cleanly. A budget
+   (which fills unpriced lines) keeps `ok` true. Env knobs: `PRICING_TIMEOUT_MS`, `PRICING_MAX_RETRIES`,
+   `PRICING_BREAKER_THRESHOLD`, `PRICE_CACHE_TTL_MS`.
 5. **Budget fallback + UNITS (U3 + Aug-1 fix):** an unmatched line no longer silently drops from the
    total — the section's materials budget is spread across the unmatched lines, tagged
    `price_source:"proposal_budget"`. **`budget_total`/`budget_sections` are the CLIENT PRICE**, so they
@@ -156,7 +161,7 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
 | A16 | `## Scope of Work` → `### N.` subsections parsed as sections; non-work headings denylisted | ✅ MET (Sing fix) |
 | A17 | JSON response shape unchanged across the fixes (values corrected, fields additive) | ✅ MET — verified by key diff |
 
-**Test count: 547 passing, 0 failing** (`npm test`).
+**Test count: 553 passing, 0 failing** (`npm test`).
 
 ---
 
@@ -188,6 +193,11 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
   (5) Bathroom assumed-area default 100 → 50 sqft + response-level `assumptions[]`. (6) `- **Title**:
   body` bullets accepted as SOW subsections; a weak "floor tile" phase folds into the dominant room
   (no more spurious flooring split). Response shape still additive-only.
+- **Provider-outage hardening (2026-08-04)** — a **circuit breaker** (fail fast when the live provider
+  is down/slow, → budget fallback, instead of hanging every line) and a **persistent price cache**
+  (scrape each fixed search term once, reuse across requests + survive outages, and cut credit burn).
+  Both are invisible to the response shape. Prompted by a SerpApi Home Depot engine outage where every
+  search took 55-90s vs our per-lookup timeout — an upstream provider issue, not our code.
 
 ---
 
