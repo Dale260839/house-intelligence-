@@ -360,6 +360,40 @@ const pline = (p, key) => p.lines.find(l => l.key === key);
   check('cache does NOT store failures', failShared.size === 0);
 
   console.log('\n========================================');
+  console.log('TOTAL-TIME BUDGET + 200-with-error (Sing Aug-4)');
+  console.log('========================================');
+
+  const sleepMs = ms => new Promise(r => setTimeout(r, ms));
+  // A slow provider so the total-time budget trips: batch 1 prices, the rest come back partial.
+  const slowProv = { id: 'slow', source: 'homedepot_live', async lookup({ key, tier: tr }) {
+    await sleepMs(40);
+    const p = MOCK_UNIT_PRICES[key] && MOCK_UNIT_PRICES[key][tr];
+    return p != null ? { ok: true, unit_price: p, currency: 'USD', source: 'homedepot_live' } : { ok: false, reason: 'no_match' };
+  } };
+  const budgeted = await priceTakeoff(takeoff(), { provider: slowProv, dataset: ds, tier: 'better', maxTotalMs: 30 });
+  check('total-time budget returns PARTIAL results (not all lines priced)', budgeted.priced_count > 0 && budgeted.priced_count < takeoff().materials.length);
+  check('  -> unpriced lines flagged pricing_timeout', budgeted.unpriced_lines.some(u => u.reason === 'pricing_timeout'));
+  check('  -> pricing.timed_out flag set', budgeted.timed_out === true);
+  check('  -> never hangs: a generous budget prices everything (no timed_out)',
+    (await priceTakeoff(takeoff(), { provider: slowProv, dataset: ds, tier: 'better', maxTotalMs: 60000 })).timed_out === undefined);
+
+  // SerpApi 200-with-error body: HTTP 200 but the JSON says the scrape errored -> TRANSIENT, not
+  // a silent no_match (Sing's "200 but no price" case).
+  const errBody = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, maxRetries: 0,
+    fetchImpl: async () => ({ ok: true, status: 200, async json() { return { search_metadata: { status: 'Error' }, error: 'timeout scraping home depot' }; }, async text() { return ''; } }) });
+  const er = await errBody.lookup({ query: 'x' });
+  check('SerpApi 200-with-error body -> transient provider_error (not silent no_match)', er.ok === false && er.reason === 'provider_error');
+
+  let peCalls = 0;
+  const peRetry = createHomeDepotProvider({ apiKey: 'K', retryBackoffMs: 1, maxRetries: 2,
+    fetchImpl: async () => { peCalls++;
+      if (peCalls < 2) return { ok: true, status: 200, async json() { return { search_metadata: { status: 'Error' } }; }, async text() { return ''; } };
+      return { ok: true, status: 200, async json() { return { products: [{ price: 11 }] }; }, async text() { return ''; } };
+    } });
+  const per = await peRetry.lookup({ query: 'x' });
+  check('200-with-error is retried (transient), then succeeds', per.ok === true && per.unit_price === 11 && peCalls === 2);
+
+  console.log('\n========================================');
   console.log('PROVIDER SELECTION (mirrors selectStore)');
   console.log('========================================');
   check('HOMEDEPOT_API_KEY set -> live provider', selectPricingProvider({ HOMEDEPOT_API_KEY: 'k' }).provider.id === 'homedepot_live');

@@ -104,7 +104,12 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
    takeoffs, and a cache warmed before a provider outage keeps serving prices **through** the outage.
    The block carries `priced_count`/`unpriced_count`, and `ok` flips to **false** (`reason:
    "pricing_degraded"`) when >25% of lines fail — one signal so consumers degrade cleanly. A budget
-   (which fills unpriced lines) keeps `ok` true. Env knobs: `PRICING_TIMEOUT_MS`, `PRICING_MAX_RETRIES`,
+   (which fills unpriced lines) keeps `ok` true. A **total-time budget** (`PRICING_MAX_TOTAL_MS`, default
+   20s) caps the whole pricing pass: past it, remaining lines return as partial (`reason:
+   "pricing_timeout"`) and `pricing.timed_out:true` is set — a contractor never waits out a slow
+   provider. A SerpApi **HTTP-200-with-error body** (a failed scrape that still returns 200 — the "200
+   but no price" case) is treated as a transient `provider_error` (retried / counted by the breaker),
+   not a silent `no_match`. Env knobs: `PRICING_TIMEOUT_MS`, `PRICING_MAX_TOTAL_MS`, `PRICING_MAX_RETRIES`,
    `PRICING_BREAKER_THRESHOLD`, `PRICE_CACHE_TTL_MS`.
 5. **Budget fallback + UNITS (U3 + Aug-1 fix):** an unmatched line no longer silently drops from the
    total — the section's materials budget is spread across the unmatched lines, tagged
@@ -161,7 +166,7 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
 | A16 | `## Scope of Work` → `### N.` subsections parsed as sections; non-work headings denylisted | ✅ MET (Sing fix) |
 | A17 | JSON response shape unchanged across the fixes (values corrected, fields additive) | ✅ MET — verified by key diff |
 
-**Test count: 553 passing, 0 failing** (`npm test`).
+**Test count: 559 passing, 0 failing** (`npm test`).
 
 ---
 
@@ -198,6 +203,11 @@ become `type:"passthrough"`, `calculation:"estimated"` lines carrying their `sou
   (scrape each fixed search term once, reuse across requests + survive outages, and cut credit burn).
   Both are invisible to the response shape. Prompted by a SerpApi Home Depot engine outage where every
   search took 55-90s vs our per-lookup timeout — an upstream provider issue, not our code.
+- **Partial-results time budget + 200-error handling (Sing, 2026-08-04)** — a **total-time budget**
+  (`PRICING_MAX_TOTAL_MS`, default 20s) so a slow provider returns partial results with
+  `pricing.timed_out:true` (Sing: "no contractor sits through a 3-minute wait"), and detection of
+  SerpApi's **HTTP-200-with-error body** as a transient `provider_error` (the "200 but no price" half of
+  the failures) instead of a silent `no_match`. `timed_out` is additive (omitted unless set).
 
 ---
 

@@ -547,10 +547,14 @@ also a materials figure and bypasses the share.
 
 ### Pricing reliability (retry + one degrade signal)
 
-SerpApi is flaky under concurrency, so transient lookups (network/timeout/rate-limit) are **retried**
-with backoff. The `pricing` block also reports **`priced_count`** / **`unpriced_count`**, and
-**`pricing.ok` flips to `false`** with `reason: "pricing_degraded"` when more than ~25% of lines fail —
-so you can hide the profit layout off one signal instead of walking two arrays. `demolition_dumpster`
+SerpApi is flaky under concurrency, so transient lookups (network/timeout/rate-limit, and a SerpApi
+HTTP-200-with-error body) are **retried** with backoff; a **circuit breaker** fails the rest of a
+takeoff fast when the provider is down. A **total-time budget** (default 20s) caps the whole pass:
+past it, remaining lines come back as partial with `reason: "pricing_timeout"` and the block sets
+**`pricing.timed_out: true`** (present only when it happens) — so a contractor never waits out a slow
+provider. The block also reports **`priced_count`** / **`unpriced_count`**, and **`pricing.ok` flips to
+`false`** with `reason: "pricing_degraded"` when more than ~25% of lines fail — so you can hide the
+profit layout off one signal instead of walking two arrays. `demolition_dumpster`
 comes back `unpriced` with the distinct reason **`not_retail_sku`** (render it as a "local quote" line).
 Proposal responses also carry a top-level **`assumptions[]`** flagging any section whose area was
 assumed (not stated).
@@ -758,6 +762,6 @@ not a substitute for field measurement.
 ---
 
 _Engine + API are unit-tested (59 engine + 46 bathroom + 19 room-shape + 23 pack-size + 40 add-ons + 53 flooring +
-101 pricing + 71 scope + 59 proposal + 24 rate-limit + 58 HTTP tests = **553**). Standards are sourced in
+107 pricing + 71 scope + 59 proposal + 24 rate-limit + 58 HTTP tests = **559**). Standards are sourced in
 `material_dataset.json` `_meta`. House Intelligence is untouched — separate service, shared repo._
 

@@ -227,7 +227,7 @@ function buildSearchUrl(baseUrl, apiKey, query) {
 function isTransientLookup(r) {
   const x = r && r.reason;
   return x === 'network_error' || x === 'rate_limited' || x === 'request_timeout'
-      || x === 'http_error' || /^http_5\d\d$/.test(x || '');
+      || x === 'http_error' || x === 'provider_error' || /^http_5\d\d$/.test(x || '');
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -277,7 +277,7 @@ function createHomeDepotProvider(opts = {}) {
   return {
     id: 'homedepot_live',
     source: 'homedepot_live',
-    async lookup({ query, minPrice, maxPrice, priceUnit }) {
+    async lookup({ query, minPrice, maxPrice, priceUnit, timeoutMs: callTimeoutMs }) {
       if (!query) return { ok: false, reason: 'no_search_term' };
       // Key on the guards + unit too: the same term with a different floor/ceiling or price unit
       // is a different question and must not return a cached answer from another config.
@@ -291,12 +291,16 @@ function createHomeDepotProvider(opts = {}) {
       // 3. circuit breaker — provider is down for this request; fail fast, don't hang.
       if (tripped) { const r = { ok: false, reason: 'provider_unavailable' }; memo.set(cacheKey, r); return r; }
 
+      // A per-call timeout (from a total-time budget) can shrink the fetch window; never grow it
+      // past the provider default.
+      const effTimeoutMs = (callTimeoutMs && callTimeoutMs < timeoutMs) ? callTimeoutMs : timeoutMs;
+
       const attempt = async () => {
         try {
           const res = await fetchImpl(buildSearchUrl(apiUrl, apiKey, query), {
             method: 'GET',
             headers: { Accept: 'application/json' },
-            timeoutMs,
+            timeoutMs: effTimeoutMs,
           });
           if (!res || !res.ok) {
             const status = res && res.status;
@@ -307,6 +311,13 @@ function createHomeDepotProvider(opts = {}) {
           }
           let json;
           try { json = await res.json(); } catch { json = null; }
+          // SerpApi can return HTTP 200 with an ERROR in the body (a failed/partial scrape — the
+          // "200 but no price" case). Treat that as TRANSIENT (retry + count toward the breaker),
+          // NOT a genuine no_match, so it isn't silently dropped.
+          const meta = json && json.search_metadata;
+          if (json && ((meta && /error/i.test(String(meta.status || ''))) || json.error)) {
+            return { ok: false, reason: 'provider_error', detail: String((json.error || (meta && meta.status)) || 'provider_error') };
+          }
           const product = extractProduct(json, { minPrice, maxPrice, priceUnit });
           return product
             ? { ok: true, unit_price: product.price, currency: 'USD',

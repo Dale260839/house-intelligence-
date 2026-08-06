@@ -64,6 +64,17 @@ function pricingReliability(pricedCount, unpricedCount) {
   };
 }
 
+// Total wall-clock budget for one pricing pass (Sing's ask). Past this, remaining lines come back
+// as partial (`pricing_timeout`) so a contractor never waits out a slow provider — the circuit
+// breaker handles a hard outage even faster; this caps the "slow but partially succeeding" case.
+function pricingDeadline(opts) {
+  const ms = Number(opts && opts.maxTotalMs) || Number(process.env.PRICING_MAX_TOTAL_MS) || 20000;
+  return Date.now() + ms;
+}
+// Lines we cut short (time budget / breaker) — distinct from a genuine no_match.
+const CUTOFF_REASONS = new Set(['pricing_timeout', 'provider_unavailable']);
+const wasTimedOut = (unpriced) => unpriced.some(u => CUTOFF_REASONS.has(u.reason));
+
 // Run fn over items with at most `limit` in flight at once, preserving input order.
 // Lets the per-line price lookups overlap (a full takeoff prices in ~one slow call
 // instead of the sum of 11) without hammering a rate-limited API with all 11 at once.
@@ -121,7 +132,7 @@ const PRICE_CONCURRENCY = 5;  // overlap lookups but stay under free-tier rate l
  * its `price_source` (the provider that answered: homedepot_live | mock | …). Lookups run
  * CONCURRENTLY (capped) and input order is preserved. Never throws.
  */
-async function priceMaterialLines(materials, pricingCfg, provider, tier) {
+async function priceMaterialLines(materials, pricingCfg, provider, tier, deadlineAt) {
   const lineCfg = (pricingCfg && pricingCfg.lines) || {};
 
   const priceOne = async (m) => {
@@ -142,12 +153,20 @@ async function priceMaterialLines(materials, pricingCfg, provider, tier) {
     // distinctly, so the consumer renders a "local quote" line rather than a broken lookup.
     if (NOT_RETAIL_KEYS.has(m.key)) return { ...base, priced: false, price_source: null, reason: 'not_retail_sku' };
 
+    // TOTAL-TIME BUDGET: once the deadline passes, stop starting lookups and return the rest as
+    // partial (unpriced) — a contractor gets a fast response instead of waiting out a slow provider.
+    if (deadlineAt && Date.now() >= deadlineAt) {
+      return { ...base, priced: false, price_source: null, reason: 'pricing_timeout' };
+    }
+
     // Effective sanity band: the dataset line overrides the per-key default (PRICE_BANDS).
     const band = PRICE_BANDS[m.key] || {};
     const minPrice = (cfg.min_unit_price != null) ? cfg.min_unit_price : band.min;
     const maxPrice = (cfg.max_unit_price != null) ? cfg.max_unit_price : band.max;
+    // Cap this lookup's own timeout so a single in-flight call can't run far past the deadline.
+    const callTimeoutMs = deadlineAt ? Math.max(1500, deadlineAt - Date.now()) : undefined;
     const res = await provider.lookup({ key: m.key, query, tier, priceUnit: base.price_unit,
-      maxPrice, minPrice });
+      maxPrice, minPrice, timeoutMs: callTimeoutMs });
     if (!res || !res.ok) return { ...base, priced: false, price_source: null, reason: (res && res.reason) || 'lookup_failed', query };
 
     return {
@@ -194,8 +213,9 @@ async function priceTakeoff(takeoff, opts = {}) {
   const { tier, markupPct, laborCost, laborPct, warnings } =
     resolvePricingOpts(opts, pricingCfg);
 
-  // 1-3: price each material line at the chosen tier (concurrent, capped, order-preserving).
-  const { lines, unpriced } = await priceMaterialLines(takeoff.materials, pricingCfg, provider, tier);
+  // 1-3: price each material line at the chosen tier (concurrent, capped, order-preserving, and
+  // bounded by a total-time budget so a slow provider returns partial results, not a hang).
+  const { lines, unpriced } = await priceMaterialLines(takeoff.materials, pricingCfg, provider, tier, pricingDeadline(opts));
 
   // 4: labor line.
   const materialsCost = round2(lines.reduce((s, l) => s + l.line_cost, 0));
@@ -221,6 +241,7 @@ async function priceTakeoff(takeoff, opts = {}) {
     fully_priced: unpriced.length === 0,
     priced_count: rel.priced_count,
     unpriced_count: rel.unpriced_count,
+    timed_out: wasTimedOut(unpriced) || undefined,   // provider was cut short by the time budget/breaker
     labor: {
       basis: laborBasis,
       pct_of_materials: laborBasis === 'pct_of_materials' ? laborPct : null,
@@ -344,6 +365,7 @@ async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
   const { tier, markupPct, laborCost, laborPct, warnings } = resolvePricingOpts(opts, firstCfg);
 
   const materialsShare = resolveMaterialsShare(opts);
+  const deadlineAt = pricingDeadline(opts);   // one budget shared across all sections
   const allLines = [];
   const allUnpriced = [];
   const sectionBreakdown = [];
@@ -362,7 +384,7 @@ async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
       continue;
     }
 
-    const { lines, unpriced } = await priceMaterialLines(st.materials, cfg, provider, tier);
+    const { lines, unpriced } = await priceMaterialLines(st.materials, cfg, provider, tier, deadlineAt);
     const matBudget = sectionMaterialsBudget(st, opts, materialsShare, sectionTakeoffs.length);
     const { estimated, remainingUnpriced } = budgetFallbackLines(lines, unpriced, matBudget);
     const sectionLines = [...lines, ...estimated];
@@ -397,6 +419,7 @@ async function priceScopeTakeoff(sectionTakeoffs, opts = {}) {
     fully_priced: allUnpriced.length === 0,
     priced_count: rel.priced_count,
     unpriced_count: rel.unpriced_count,
+    timed_out: wasTimedOut(allUnpriced) || undefined,   // provider cut short by the time budget/breaker
     sections: sectionBreakdown,
     labor: {
       basis: laborBasis,
