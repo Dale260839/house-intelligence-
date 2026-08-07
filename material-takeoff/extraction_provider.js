@@ -314,6 +314,15 @@ function heuristicExtract({ proposal_markdown, budget_total, budget_sections } =
       ? dominant : undefined;
     const r = extractSection(b, forceType);
     if (r) {
+      // A block folded in by forceType was RECLASSIFIED — any area it states describes its
+      // original trade ("confirm the 1,400 sq ft flooring quantity" inside a site-protection
+      // phase), so it must not donate that figure to the room it joined.
+      if (forceType) {
+        const rule = TYPE_RULES.find(x => x.type === forceType);
+        r.section.area_sqft = DEFAULT_SQFT[forceType];
+        r.section.inputs = { [rule.sqft]: DEFAULT_SQFT[forceType] };
+        r.section.confidence = 'assumed';
+      }
       roomSections.push(r.section);
       notes.push(...r.notes);
     } else {

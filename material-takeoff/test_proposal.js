@@ -145,6 +145,16 @@ Renovate the 90 sqft master bathroom with a new walk-in shower and vanity. Insta
   check('a real LVP flooring job still splits from the kitchen (strong signal)',
     kitchenFloor.extracted_scope.sections.length === 2 && kitchenFloor.extracted_scope.sections.some(s => s.project_type === 'flooring_only'));
 
+  // A folded phase that STATES an area (its ORIGINAL trade's) must NOT donate it to the room it
+  // joined — a "confirm the 1,400 sq ft flooring quantity" site-protection phase folds into the
+  // kitchen but must not make the kitchen 1,400 sqft (that produced a $201k quote on a $34k job).
+  const foldArea = heuristicExtract({ proposal_markdown:
+    '## Scope of Work\n### 1. Pre-Construction & Site Protection\n- protect floors, confirm the 1,400 sq ft flooring quantity before ordering\n### 2. Kitchen Cabinets & Counters\n- install new shaker cabinets and quartz counters\n### 3. Flooring Installation\n- install 1,400 sqft of LVP\n' });
+  const foldK = foldArea.extracted_scope.sections.find(s => s.project_type === 'kitchen_remodel');
+  const foldF = foldArea.extracted_scope.sections.find(s => s.project_type === 'flooring_only');
+  check('a reclassified (folded) phase does NOT donate its stated area to the room', foldK && foldK.confidence === 'assumed' && foldK.area_sqft !== 1400);
+  check('  -> the real flooring section keeps its stated 1,400', foldF && foldF.area_sqft === 1400 && foldF.confidence === 'stated');
+
   // §4: BuildSuite's "- **Title**: body" bullets under Scope of Work are parsed as subsections.
   const bulleted = heuristicExtract({ proposal_markdown:
     '## Scope of Work\n\n- **Kitchen Demolition & Cabinets**: Remove kitchen finishes and install new cabinets in the 180 sqft kitchen.\n- **Flooring Installation**: Install 1400 sqft of LVP throughout.\n' });

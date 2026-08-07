@@ -16,3 +16,5 @@ Thumbs.db
 
 # Generated CSV exports from `node lookup_engine.js --rows <REGION>`
 *.csv
+material-takeoff.zip
+*.zip
